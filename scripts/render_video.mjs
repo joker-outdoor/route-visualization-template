@@ -27,7 +27,8 @@ try{
   await page.waitForFunction(()=>window.videoReady||window.videoError,{},{timeout:60000});
   const error=await page.evaluate(()=>window.videoError);if(error)throw Error(error);
   const first=await page.evaluate(d=>window.renderVideoFrame(0,d),opts.duration);const last=await page.evaluate(d=>window.renderVideoFrame(d,d),opts.duration);
-  if(first.km!==0||last.progress!==1)throw Error('轨迹起终点校验失败');
+  const pointCount=await page.evaluate(()=>window.videoPointCount);
+  if(!Number.isInteger(pointCount)||pointCount<2||first.index!==0||first.progress!==0||last.index!==pointCount-1||last.progress!==1||first.km!==0||last.km<=0)throw Error('轨迹起终点校验失败');
   console.log(JSON.stringify({start:first,end:last,width:opts.width,height:opts.height,fps:opts.fps,duration:opts.duration}));
   encoder=spawn('ffmpeg',['-hide_banner','-loglevel','error','-n','-f','image2pipe','-vcodec','png','-framerate',String(opts.fps),'-i','pipe:0','-an','-c:v','libx264','-preset','fast','-crf','20','-pix_fmt','yuv420p','-movflags','+faststart',output],{stdio:['pipe','ignore','pipe']});
   const done=new Promise((r,j)=>{encoder.once('error',j);encoder.once('close',code=>code===0?r():j(Error(`ffmpeg ${code}: ${encoderLog}`)));});

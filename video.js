@@ -15,9 +15,10 @@ try {
   const scene=new THREE.Scene(); scene.background=new THREE.Color('#091319');
   scene.add(new THREE.HemisphereLight('#f2f7ed','#243e48',1.6));
   const sun=new THREE.DirectionalLight('#fff1d6',1.4);sun.position.set(-5,12,8);scene.add(sun);
-  const camera=new THREE.PerspectiveCamera(42,innerWidth/innerHeight,.02,200);
-  camera.setViewOffset(innerWidth,innerHeight,0,innerHeight*.10,innerWidth,innerHeight);
   const W=D.widthKm,H=D.heightKm,span=Math.max(W,H),base=Math.min(...T.elevations),exag=2.4;
+  const camera=new THREE.PerspectiveCamera(42,innerWidth/innerHeight,span/10000,span*20);
+  camera.setViewOffset(innerWidth,innerHeight,0,innerHeight*.10,innerWidth,innerHeight);
+  window.videoPointCount=points.length;
   const sample=(u,v)=>{
     const x=clamp(u)*(T.w-1),y=clamp(v)*(T.h-1),xi=Math.min(T.w-2,Math.floor(x)),yi=Math.min(T.h-2,Math.floor(y)),fx=x-xi,fy=y-yi,i=yi*T.w+xi;
     return T.elevations[i]*(1-fx)*(1-fy)+T.elevations[i+1]*fx*(1-fy)+T.elevations[i+T.w]* (1-fx)*fy+T.elevations[i+T.w+1]*fx*fy;
@@ -57,12 +58,12 @@ try {
     ctx.strokeStyle='#fff8';ctx.beginPath();ctx.moveTo(X(km),10);ctx.lineTo(X(km),ph-25);ctx.stroke();ctx.fillStyle='#fff';ctx.beginPath();ctx.arc(X(km),Y(ele),5,0,Math.PI*2);ctx.fill();
   }
   // Exact GPX polyline interpolation; no spline may cut across switchbacks.
-  function locate(km){let l=0,r=points.length-1;while(l<r){const m=(l+r)>>1;if(points[m][3]<km)l=m+1;else r=m;}
+  function locate(km){if(km>=total)return {index:points.length-1,pos:vertices.at(-1).clone(),ele:points.at(-1)[2]};let l=0,r=points.length-1;while(l<r){const m=(l+r)>>1;if(points[m][3]<km)l=m+1;else r=m;}
     const a=Math.max(0,l-1),den=points[l][3]-points[a][3],t=den>0?clamp((km-points[a][3])/den):0;
     return {index:l,pos:vertices[a].clone().lerp(vertices[l],t),ele:points[a][2]+(points[l][2]-points[a][2])*t};
   }
   const portrait=innerWidth<innerHeight,center=new THREE.Vector3(0,(D.stats.maxM-base)/2000*exag,0);
-  const overview=span*(portrait?2.0:1.05),near=span*(portrait?.65:.40);
+  const overview=span*(portrait?2.7:1.05),near=span*(portrait?.65:.40);
   window.renderVideoFrame=(seconds,duration=46)=>{
     const t=clamp(seconds/duration),progress=clamp((t-.08)/.84),km=progress*total,p=locate(km);
     const travel=smooth(t/.10)*(1-smooth((t-.90)/.10));
