@@ -1,0 +1,14 @@
+{
+  "title": "演示路线 · 合成数据",
+  "subtitle": "可替换为自己的 GPX 和地标",
+  "routeLabel": "合成路线 · 非真实行程",
+  "madeOn": "2026-10-02",
+  "recordedOn": null,
+  "landmarks": [
+    {
+      "name": "演示地标",
+      "index": 40,
+      "positionSource": "合成示例的第 40 号轨迹点"
+    }
+  ]
+}

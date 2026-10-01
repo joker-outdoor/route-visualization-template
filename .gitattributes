@@ -1,0 +1,3 @@
+vendor/* -diff
+data/*.json -diff
+data/*.gpx -diff

@@ -1,0 +1,1 @@
+{"name":"longquan-seven-lakes-2026-10-02","private":true,"type":"module","scripts":{"check":"node --check app.js && python3 scripts/check_data.py"}}

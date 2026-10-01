@@ -1,0 +1,34 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<meta name="theme-color" content="#0a1218">
+<meta name="description" content="GPX 路线可视化：3D地形、沿途地标与联动海拔剖面。">
+<title>路线可视化 · Joker Outdoor</title>
+<link rel="stylesheet" href="style.css">
+<script type="importmap">{"imports":{"three":"./vendor/three.module.js"}}</script>
+</head>
+<body>
+<main id="app">
+<canvas id="map" aria-label="路线地图"></canvas>
+<div id="labels"></div>
+<header><p class="eyebrow">JOKER OUTDOOR / ROUTE ATLAS</p><h1 id="title">路线可视化</h1><p id="subtitle" class="subtitle"></p></header>
+<aside id="side" class="panel">
+<div class="route-heading"><span class="route-dot"></span><span id="route-heading">GPX 路线</span><span class="badge">GPX</span></div>
+<div class="big-distance"><strong id="distance">—</strong><span>km <small>轨迹测算</small></span></div>
+<div class="stats"><div><small>累计爬升</small><strong id="gain">—</strong></div><div><small>最高海拔</small><strong id="max">—</strong></div><div><small>累计下降</small><strong id="loss">—</strong></div><div><small>记录用时</small><strong id="duration">—</strong></div></div>
+<div class="divider"></div><h2 id="landmark-title">沿途地标</h2>
+<ol id="landmark-list"></ol>
+<p id="landmark-note" class="detail"></p>
+<details><summary>轨迹与数据说明</summary><p id="data-note"></p></details>
+<a id="download" class="download" href="data/route.gpx" download>↓ 下载路线 GPX</a>
+</aside>
+<nav id="tools" aria-label="地图控制"><div class="tool-row panel"><button id="overview" aria-pressed="true">全景</button><button id="top" aria-pressed="false">俯视</button><button id="rotate" aria-pressed="false">旋转</button></div><div class="tool-row panel"><label for="exag">高度夸张 <input id="exag" type="range" min="1" max="5" step="0.5" value="3"></label><output id="exag-value">3×</output></div><div class="tool-row panel"><button id="texture" aria-pressed="true">卫星底图</button><button id="ghost" aria-pressed="true">显示遮挡段</button></div><div class="compass panel"><span id="north">▲<br>N</span></div></nav>
+<section id="profile" class="panel" aria-label="海拔剖面"><div class="profile-heading"><h2>ELEVATION <span>海拔剖面</span></h2><output id="readout">滑过剖面，查看地图位置</output></div><canvas id="chart" tabindex="0" aria-label="海拔剖面，可用左右方向键浏览路线"></canvas><div class="profile-foot"><span>拖动地图旋转 · 滚轮缩放 · 右键平移</span><span id="record-date">WGS84</span></div></section>
+<div id="point-card" class="panel" hidden><button id="close-card" aria-label="关闭信息">×</button><h2 id="point-name"></h2><p id="point-detail"></p></div>
+<div id="status" role="status">正在加载路线地形…</div>
+<footer><a href="https://www.esri.com/en-us/arcgis/products/arcgis-living-atlas/maps" target="_blank" rel="noopener"><span id="imagery-credit">底图</span></a><span> · </span><a href="https://github.com/tilezen/joerd" target="_blank" rel="noopener"><span id="terrain-credit">地形</span></a></footer>
+</main>
+<script type="module" src="app.js"></script>
+</body>
+</html>
