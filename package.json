@@ -1,1 +1,11 @@
-{"name":"longquan-seven-lakes-2026-10-02","private":true,"type":"module","scripts":{"check":"node --check app.js && python3 scripts/check_data.py"}}
+{
+  "name": "joker-outdoor-route-visualization-template",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "check": "node --check app.js && python3 scripts/check_data.py && node --check video.js && node --check scripts/render_video.mjs"
+  },
+  "devDependencies": {
+    "playwright": "1.62.1"
+  }
+}
