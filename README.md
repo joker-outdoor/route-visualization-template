@@ -26,9 +26,9 @@ python3 -m http.server 8080 --bind 127.0.0.1
 - 可选 `subtitle`、`routeLabel`、`startName`、`finishName`、`landmarkTitle`、`landmarkNote`。
 - `landmarks` 的每项必须有 `name`、`positionSource`，以及零起始的 `index` 或 WGS84 `lon` / `lat`。坐标吸附到最近轨迹点。只有名称和顺序时，先补定位依据；不要按里程比例伪造地标位置。概略定位必须写明。
 - 距离从 GPX 坐标测算；剖面保留 GPX 海拔，3D 路线贴合 DEM。地形默认夸张 3 倍，可以调回 1 倍。
-- 原 GPX 的 `Distance`（米）、`ElevationGain` / `ElevationLoss`（米）、`BeginTime` / `EndTime`（Unix 毫秒）扩展可提供记录统计。用时也可从完整且顺序正确的逐点 ISO 时间得到。其它格式未识别的统计显示未提供，不把海拔噪声累计为正式爬升。
+- 原 GPX 的 `Distance`（米）、`ElevationGain` / `ElevationLoss`（米）、`BeginTime` / `EndTime`（Unix 毫秒）扩展可提供记录统计。优先读取包含此轨迹段的 `trk/extensions`；逐字段缺失时回退到 `gpx/extensions`。用时也可从完整且顺序正确的逐点 ISO 时间得到。其它格式未识别的统计显示未提供，不把海拔噪声累计为正式爬升。
 - 要手工提供统计，配置 `stats` 的 `gainM`、`lossM`、`durationHours`、`sourceDistanceKm`，同时必须填写 `statsSource`。缺失值用 `null`。
-- 目前支持 GPX 1.0 / 1.1 的一个连续 `trkseg`，2–20000 点，每点必须有海拔；多段轨迹需先拆分，避免把断点画成路段。超大、跨日期变更线、极区或极窄路线会明确拒绝。多条路线选择器可在此基础上另行实现。
+- 目前支持 GPX 1.0 / 1.1 的一个连续 `trkseg`，2–20000 点，每点必须有海拔；多段轨迹需先拆分，避免把断点画成路段。直线路线会按长边地面长度扩大短边留白；超大、跨日期变更线、极区或留白后仍超出支持范围的路线会明确拒绝。多条路线选择器可在此基础上另行实现。
 
 公开 `data/route.gpx` 只保留轨迹名、坐标和海拔，去掉作者、账号、头像、照片、逐点时间及原扩展。发布前核查生成数据与配置，不提交原始输入。
 

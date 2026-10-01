@@ -100,6 +100,10 @@ function fillDetails() {
   $('download').download = `${D.title}.gpx`;
   $('imagery-credit').textContent = D.imageryCredit;
   $('terrain-credit').textContent = D.terrainCredit;
+  for (const [id, url] of [['imagery-credit', D.imageryUrl], ['terrain-credit', D.terrainUrl]]) {
+    const link = $(id).parentElement;
+    if (url) link.href = url; else { link.removeAttribute('href'); link.removeAttribute('target'); }
+  }
   D.landmarks.forEach((landmark, i) => {
     const li = document.createElement('li'), b = document.createElement('button');
     const n = document.createElement('b'); n.textContent = String(i + 1);

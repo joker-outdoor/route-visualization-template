@@ -64,7 +64,11 @@ def parse_track(gpx, config):
     lons, lats = [p[0] for p in pts], [p[1] for p in pts]
     if max(lons)-min(lons) > 5 or max(lats)-min(lats) > 5:
         raise ValueError('Route spans over 5 degrees or crosses the antimeridian; split it into local routes')
-    padx, pady = max((max(lons)-min(lons))*.12, .002), max((max(lats)-min(lats))*.12, .002)
+    coslat = math.cos(math.radians((min(lats)+max(lats))/2))
+    spanlon, spanlat = max(lons)-min(lons), max(lats)-min(lats)
+    longest = max(spanlon*coslat, spanlat)
+    # Widen a straight route's corridor in ground units, not a fixed angular sliver.
+    padx, pady = max(spanlon*.12, longest*.12/coslat, .002), max(spanlat*.12, longest*.12, .002)
     lon0, lon1, lat0, lat1 = min(lons)-padx, max(lons)+padx, min(lats)-pady, max(lats)+pady
     mx0,my1 = merc(lon0,lat0); mx1,my0 = merc(lon1,lat1)
     scale = 40075.016686*math.cos(math.radians((lat0+lat1)/2))
@@ -72,10 +76,14 @@ def parse_track(gpx, config):
     if max(w/h,h/w) > 8: raise ValueError('Very narrow route extent; split it or supply a less elongated track')
     for p in pts:
         x,y = merc(p[0],p[1]); p.extend([round((x-mx0)/(mx1-mx0),8), round((y-my0)/(my1-my0),8)])
-    extension = root.find('{*}extensions')
+    track = next(t for t in root.findall('{*}trk') if segments[0] in list(t))
+    extensions = [track.find('{*}extensions'), root.find('{*}extensions')]
     def ext(key):
-        el = extension.find('{*}'+key) if extension is not None else None
-        return el.text if el is not None else None
+        # The selected track takes precedence; absent fields fall back to the GPX root.
+        for extension in extensions:
+            el = extension.find('{*}'+key) if extension is not None else None
+            if el is not None and el.text: return el.text
+        return None
     def optional(key):
         val = ext(key)
         return finite(val,key) if val else None
@@ -107,6 +115,8 @@ def parse_track(gpx, config):
             'startName':config.get('startName',ext('PosStartName') or '起点'), 'finishName':config.get('finishName',ext('PosEndName') or '终点'),
             'bounds':{'lon0':lon0,'lon1':lon1,'lat0':lat0,'lat1':lat1,'mercator':[mx0,my0,mx1,my1]}, 'widthKm':w,'heightKm':h,
             'landmarkTitle':config.get('landmarkTitle','沿途地标'), 'landmarkNote':config.get('landmarkNote','标注里程对应邻近轨迹点，点击查看位置。'),
+            'imageryUrl':'https://www.esri.com/en-us/arcgis/products/arcgis-living-atlas/maps',
+            'terrainUrl':'https://github.com/tilezen/joerd',
             'imageryCredit':'Imagery © Esri, Maxar, Earthstar Geographics, and the GIS User Community',
             'terrainCredit':'Terrain · Mapzen; SRTM / GMTED2010 courtesy of USGS', 'landmarks':[]}
     if not isinstance(data['title'],str) or not data['title'].strip(): raise ValueError('title must be a nonempty string')
@@ -155,6 +165,7 @@ def build(gpx,config,out,demo=False):
         for x in range(0,size[0],30): draw.line([(x,0),(x,size[1])],fill='#386251')
         terrain={'w':61,'h':61,'elevations':[round(500+180*math.sin(x/60*math.pi)*math.sin(y/60*math.pi),1) for y in range(61) for x in range(61)]}
         data['imageryCredit']='合成网格底图 · 演示数据';data['terrainCredit']='合成地形 · 不代表真实地貌'
+        data['imageryUrl']=None;data['terrainUrl']=None
     else:
         z=config.get('imageryZoom',14);dz=config.get('demZoom',12)
         if type(z) is not int or type(dz) is not int or not 0 <= z <= 18 or not 0 <= dz <= 15: raise ValueError('Invalid tile zoom')

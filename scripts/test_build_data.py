@@ -34,6 +34,23 @@ class RouteTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError,'explicit'): parse_track(self.p,self.config)
         self.config.pop('landmarks');self.config['stats']={'gainM':100}
         with self.assertRaisesRegex(ValueError,'statsSource'): parse_track(self.p,self.config)
+    def test_track_extensions_precedence_and_root_fallback(self):
+        self.write();g=ET.parse(self.p).getroot();trk=g.find('{*}trk');te=ET.SubElement(trk,'extensions');re=ET.SubElement(g,'extensions')
+        for key,value in [('ElevationGain','300'),('ElevationLoss','200'),('BeginTime','1000'),('EndTime','3601000'),('PosStartName','入口'),('PosEndName','出口')]:
+            ET.SubElement(te,key).text=value
+        ET.SubElement(re,'ElevationGain').text='999';ET.SubElement(re,'Distance').text='5000';ET.ElementTree(g).write(self.p)
+        d=parse_track(self.p,self.config)
+        self.assertEqual(d['stats']['gainM'],300);self.assertEqual(d['stats']['lossM'],200);self.assertEqual(d['stats']['durationHours'],1)
+        self.assertEqual(d['stats']['sourceDistanceKm'],5);self.assertEqual((d['startName'],d['finishName']),('入口','出口'))
+    def test_long_straight_route_has_renderable_corridor(self):
+        self.write();g=ET.parse(self.p).getroot()
+        for i,p in enumerate(g.findall('.//{*}trkpt')): p.set('lon','104');p.set('lat',str(30+i*.05))
+        ET.ElementTree(g).write(self.p);out=Path(self.tmp.name)/'data';d=build(self.p,self.config,out,True)
+        self.assertGreater(d['stats']['distanceKm'],11);self.assertLessEqual(max(d['widthKm']/d['heightKm'],d['heightKm']/d['widthKm']),8);check(out)
+    def test_checker_rejects_wrong_ground_scale(self):
+        import json
+        self.write();out=Path(self.tmp.name)/'data';build(self.p,self.config,out,True);f=out/'route.json';d=json.loads(f.read_text());d['widthKm']*=2;f.write_text(json.dumps(d))
+        with self.assertRaises(AssertionError): check(out)
     def test_bad_input_does_not_replace_existing_outputs(self):
         self.write(ele=False);out=Path(self.tmp.name)/'data';out.mkdir();(out/'route.json').write_text('unchanged')
         with self.assertRaises(ValueError): build(self.p,self.config,out,True)

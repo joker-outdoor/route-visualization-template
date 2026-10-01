@@ -14,6 +14,9 @@ def check(directory):
         km+=12742*math.asin(min(1,math.sqrt(h)))
     assert km>0 and abs(km-d['stats']['distanceKm'])<1e-8 and abs(km-p[-1][3])<1e-6
     mx0,my0,mx1,my1=d['bounds']['mercator']
+    scale=40075.016686*math.cos(math.radians((d['bounds']['lat0']+d['bounds']['lat1'])/2))
+    assert abs(d['widthKm']-(mx1-mx0)*scale)<1e-8
+    assert abs(d['heightKm']-(my1-my0)*scale)<1e-8
     for lon,lat,e,distance,u,v in p:
         mx=(lon+180)/360;my=(1-math.asinh(math.tan(math.radians(lat)))/math.pi)/2
         assert abs((mx-mx0)/(mx1-mx0)-u)<1e-7 and abs((my-my0)/(my1-my0)-v)<1e-7
