@@ -47,3 +47,19 @@ python3 scripts/check_data.py
 - Three.js 0.160.0 官方原文件，MIT，见 `vendor/LICENSE`。模板保留文件原文。
 - 真实底图由 [Esri World Imagery](https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer) 生成。版权归相应影像提供者，不随模板代码再许可。
 - DEM 来源 [Tilezen / Mapzen Terrain Tiles](https://github.com/tilezen/joerd)，保留 [对应数据署名与许可](https://github.com/tilezen/joerd/blob/master/docs/attribution.md)。生成其它地区路线时核对当地数据源的署名要求。
+
+## 导出 3D 飞越视频
+
+`video.html` 使用同一份 `data/`，按 GPX 距离推进镜头、移动点和海拔剖面；前后保留全景。数据可使用模板的 `landmarks`，兼容旧七湖页面的 `lakes`。视频显示轨迹日期、制作日期、数据署名和定位说明，不把动画时长当实际行走速度。演示数据仍明确标为合成。
+
+本机安装 Microsoft Edge、ffmpeg（含 ffprobe）与 Node.js；`npm ci` 安装锁定的 Playwright。渲染器启动独立 headless Edge 和仅监听 127.0.0.1 的短时服务器，结束后关闭，不使用个人浏览器登录态。逐帧指定动画时间，不依赖屏幕录制的实时帧率。
+
+```sh
+npm ci
+node scripts/render_video.mjs --output /path/to/route-portrait.mp4 --poster /path/to/route-poster.png
+node scripts/render_video.mjs --output /path/to/route-landscape.mp4 --width 1920 --height 1080
+```
+
+默认 1080×1920、30 fps、46 秒、无音轨，输出 H.264 / yuv420p / faststart MP4。`--width` / `--height` / `--fps` / `--duration` 可调整；已有文件拒绝覆盖。若复用外部已安装的依赖，可传 `--playwright /absolute/path/to/playwright/index.mjs`。
+
+先用 `--duration 2` 做短片试验，再输出正式片；检查开场、中段、结尾的轨迹方向、地标、里程、海拔、字幕遮挡和黑屏。脚本验证起终点及 ffprobe 编码、分辨率、帧数、时长；视觉验收另做。MP4 可放 `videos/` 后在 README 或页面添加播放、下载链接，保留具体项目生成器版本。
