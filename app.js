@@ -94,11 +94,13 @@ function createEndpointMarkers() {
 }
 function renderEndpointMarkers(projected) {
   const [start, finish] = projected;
-  const close = Math.hypot(start.x - finish.x, start.y - finish.y) < 16;
+  const dx = finish.x - start.x, dy = finish.y - start.y, distance = Math.hypot(dx, dy);
+  const shift = Math.max(0, (16 - distance) / 2);
+  const offsetX = distance ? dx / distance * shift : shift, offsetY = distance ? dy / distance * shift : 0;
   endpointMarkers.forEach((item, i) => {
     const p = projected[i];
     item.el.hidden = p.visible === false || p.x < 0 || p.x > innerWidth || p.y < 0 || p.y > innerHeight;
-    item.el.style.transform = `translate(${p.x + (close ? (i === 0 ? -8 : 8) : 0)}px,${p.y}px) translate(-50%,-50%)`;
+    item.el.style.transform = `translate(${p.x + (i === 0 ? -offsetX : offsetX)}px,${p.y + (i === 0 ? -offsetY : offsetY)}px) translate(-50%,-50%)`;
   });
 }
 function strokeRoute(context, xy, width) {
