@@ -1,8 +1,9 @@
 import * as THREE from 'three';
 import { OrbitControls } from './vendor/OrbitControls.js';
+import { palette, speedAt, valueRange, pointColor, formatPace, formatDuration, speedReadout, lengthSample, tubeColorValues, segmentColors, lineColorValues } from './route-style.js';
 
 const $ = id => document.getElementById(id);
-const color = '#b9ef69';
+let color = '#b9ef69', colorMode = 'uniform', pointColors = [], recolorRoute = () => {};
 const reducedMotion = matchMedia('(prefers-reduced-motion: reduce)').matches;
 let D, T, points, selection = null, selectedLandmark = null, renderMap = () => {}, focus = () => {};
 const chart = $('chart'), ctx = chart.getContext('2d');
@@ -19,10 +20,10 @@ function select(index, landmark = null, showCard = false) {
   markerLabels.forEach(m => m.el.classList.toggle('active', m.landmark === landmark && landmark !== null));
   if (index !== null) {
     const p = points[index];
-    $('readout').textContent = `${p[3].toFixed(2)} km · ${Math.round(p[2])} m${landmark !== null ? ' · ' + D.landmarks[landmark].name : ''}`;
+    $('readout').textContent = `${p[3].toFixed(2)} km · ${Math.round(p[2])} m · ${speedReadout(D, index)}${landmark !== null ? ' · ' + D.landmarks[landmark].name : ''}`;
     if (showCard) {
       $('point-name').textContent = landmark !== null ? D.landmarks[landmark].name : index === 0 ? '起点' : index === points.length - 1 ? '终点' : '轨迹最高点';
-      $('point-detail').textContent = `${p[3].toFixed(2)} km / 海拔 ${Math.round(p[2])} m${landmark !== null ? ' · ' + D.landmarks[landmark].positionSource : ''}`;
+      $('point-detail').textContent = `${p[3].toFixed(2)} km / 海拔 ${Math.round(p[2])} m · ${speedReadout(D, index)}${landmark !== null ? ' · ' + D.landmarks[landmark].positionSource : ''}`;
       $('point-card').hidden = false;
     }
   } else $('readout').textContent = '滑过剖面，查看地图位置';
@@ -50,10 +51,9 @@ function drawProfile() {
   ctx.textAlign = 'right'; ctx.fillText(`${D.stats.distanceKm.toFixed(1)} km`, X(D.stats.distanceKm), g.h - 3);
   ctx.beginPath(); points.forEach((p, i) => i ? ctx.lineTo(X(p[3]), Y(p[2])) : ctx.moveTo(X(p[3]), Y(p[2])));
   ctx.lineTo(X(D.stats.distanceKm), Y(e0)); ctx.lineTo(X(0), Y(e0)); ctx.closePath();
-  const gradient = ctx.createLinearGradient(0, g.t, 0, g.h - g.b); gradient.addColorStop(0, '#b9ef693d'); gradient.addColorStop(1, '#b9ef6902');
-  ctx.fillStyle = gradient; ctx.fill(); ctx.beginPath();
-  points.forEach((p, i) => i ? ctx.lineTo(X(p[3]), Y(p[2])) : ctx.moveTo(X(p[3]), Y(p[2])));
-  ctx.strokeStyle = color; ctx.lineWidth = 1.5; ctx.stroke(); ctx.lineWidth = 1;
+  const gradient = ctx.createLinearGradient(0, g.t, 0, g.h - g.b); gradient.addColorStop(0, `${color}3d`); gradient.addColorStop(1, `${color}02`);
+  ctx.fillStyle = gradient; ctx.fill();
+  strokeRoute(ctx, p => [X(p[3]), Y(p[2])], 1.5);
   D.landmarks.forEach((landmark, i) => {
     const p = points[landmark.index], x = X(p[3]);
     ctx.strokeStyle = '#6ee1db44'; ctx.beginPath(); ctx.moveTo(x, 16); ctx.lineTo(x, Y(p[2])); ctx.stroke();
@@ -81,6 +81,37 @@ chart.addEventListener('keydown', e => {
 });
 $('close-card').onclick = () => { $('point-card').hidden = true; };
 
+function strokeRoute(context, xy, width) {
+  context.lineWidth = width;
+  if (colorMode === 'uniform') {
+    context.beginPath(); points.forEach((p, i) => { const [x, y] = xy(p); i ? context.lineTo(x, y) : context.moveTo(x, y); });
+    context.strokeStyle = color; context.stroke();
+  } else {
+    for (let i = 1; i < points.length; i++) {
+      const a = xy(points[i-1]), b = xy(points[i]);
+      if (a[0] === b[0] && a[1] === b[1]) continue;
+      const gradient = context.createLinearGradient(...a, ...b);
+      const [startColor, endColor] = segmentColors(pointColors, colorMode, i);
+      gradient.addColorStop(0, startColor); gradient.addColorStop(1, endColor);
+      context.strokeStyle = gradient; context.beginPath(); context.moveTo(...a); context.lineTo(...b); context.stroke();
+    }
+  }
+  context.lineWidth = 1;
+}
+function setColorMode(mode) {
+  colorMode = mode;
+  const range = valueRange(D, mode);
+  pointColors = points.map((_, i) => pointColor(D, mode, i, range));
+  document.querySelectorAll('[data-color]').forEach(b => b.setAttribute('aria-pressed', String(b.dataset.color === mode)));
+  const uniform = mode === 'uniform', speed = mode === 'speed';
+  $('legend-low').textContent = uniform ? '路线颜色' : speed ? `≤ ${(range[0]*3.6).toFixed(1)} km/h` : `${Math.round(range[0])} m`;
+  $('legend-high').textContent = uniform ? '' : speed ? `≥ ${(range[1]*3.6).toFixed(1)} km/h` : `${Math.round(range[1])} m`;
+  $('legend-ramp').style.background = uniform ? color : `linear-gradient(90deg,${palette.low},${palette.high})`;
+  $('legend-states').hidden = !speed;
+  $('speed-note').hidden = !speed && !document.querySelector('[data-color="speed"]').disabled;
+  $('speed-note').textContent = speed ? '推算速度 · 色阶取中间90%的速度范围；少量或常量时取实际范围' : '此路线未提供逐点速度';
+  recolorRoute(); drawProfile(); renderMap();
+}
 function fillDetails() {
   document.title = `${D.title} · Joker Outdoor`;
   $('title').textContent = D.title; $('subtitle').textContent = D.subtitle;
@@ -91,12 +122,22 @@ function fillDetails() {
     $(id).replaceChildren(document.createTextNode(D.stats[key] === null ? '未提供' : Math.round(D.stats[key]).toLocaleString('en-US') + ' '));
     if (D.stats[key] !== null) { const unit = document.createElement('em'); unit.textContent = 'm'; $(id).append(unit); }
   }
-  const minutes = D.stats.durationHours === null ? null : Math.round(D.stats.durationHours * 60);
-  $('duration').textContent = minutes === null ? '未提供' : `${Math.floor(minutes / 60)}h ${minutes % 60}m`;
+  const moving = Number.isFinite(D.stats.movingSeconds) ? D.stats.movingSeconds : null;
+  $('duration-label').textContent = moving === null ? '总耗时 · 未扣暂停' : '运动时间';
+  $('duration').textContent = formatDuration(moving ?? (D.stats.durationHours === null ? null : D.stats.durationHours * 3600));
+  $('pace').textContent = formatPace(D.stats.avgPaceSecondsKm);
+  $('pace-basis').textContent = D.stats.avgPaceSecondsKm > 0 ? `${D.stats.paceDistanceKm.toFixed(2)} km` : '未提供';
+  $('pace-basis-label').textContent = D.stats.sourceDistanceKm != null ? '配速按原记录里程' : '配速按坐标里程';
+  color = D.routeColor || '#b9ef69'; document.documentElement.style.setProperty('--green', color);
+  const speedButton = document.querySelector('[data-color="speed"]');
+  speedButton.disabled = !points.some((_, i) => speedAt(D, i).value !== null);
+  speedButton.title = speedButton.disabled ? '此路线没有可用的逐点速度' : D.speedSource;
+  document.querySelectorAll('[data-color]').forEach(b => b.onclick = () => setColorMode(b.dataset.color));
+  setColorMode('uniform');
   $('landmark-title').textContent = D.landmarkTitle;
   $('landmark-note').textContent = D.landmarkNote;
-  $('data-note').textContent = `页面日期：${D.madeOn}；轨迹日期：${D.recordedOn || '未提供'}。距离按坐标测算；爬升、下降与用时：${D.statsSource}。剖面保留轨迹海拔，3D 路线贴合 DEM。`;
-  $('record-date').textContent = `WGS84 · 轨迹 ${D.recordedOn || '日期未提供'}`;
+  $('data-note').textContent = `路线距离按坐标测算；爬升与下降：${D.statsSource}。运动计时：${D.movingTimeSource || '未提供可靠暂停统计'}。${D.stats.avgPaceSecondsKm > 0 ? '平均配速按运动时间和上述配速里程计算。' : '暂停统计不足，未计算运动配速。'}逐点速度：${D.speedSource || '未提供'}。剖面保留轨迹海拔，3D 路线贴合 DEM。`;
+  $('record-date').textContent = 'WGS84';
   $('download').download = `${D.title}.gpx`;
   $('imagery-credit').textContent = D.imageryCredit;
   $('terrain-credit').textContent = D.terrainCredit;
@@ -148,12 +189,22 @@ async function init3D() {
   }
   const vertices = points.map(routePosition);
   // Polyline segments retain GPX geometry: no spline overshoot around tight turns.
-  const routeGeo = new THREE.BufferGeometry().setFromPoints(vertices);
-  const routeLine = new THREE.Line(routeGeo, new THREE.LineBasicMaterial({ color, depthTest: true })); world.add(routeLine);
+  const routeGeo = new THREE.BufferGeometry().setFromPoints(vertices.slice(1).flatMap((v, i) => [vertices[i], v]));
+  const routeLine = new THREE.LineSegments(routeGeo, new THREE.LineBasicMaterial({ vertexColors: true, depthTest: true })); world.add(routeLine);
   const curve = new THREE.CurvePath();
   for (let i = 1; i < vertices.length; i++) if (vertices[i].distanceToSquared(vertices[i - 1]) > 0) curve.add(new THREE.LineCurve3(vertices[i - 1], vertices[i]));
-  const tube = new THREE.Mesh(new THREE.TubeGeometry(curve, Math.min(points.length * 2, 20000), extent * .0012, 5, false), new THREE.MeshBasicMaterial({ color })); world.add(tube);
-  const ghost = new THREE.Line(routeGeo, new THREE.LineBasicMaterial({ color, opacity: .25, transparent: true, depthTest: false, depthWrite: false })); ghost.renderOrder = 3; world.add(ghost);
+  const tube = new THREE.Mesh(new THREE.TubeGeometry(curve, Math.min(points.length * 2, 20000), extent * .0012, 5, false), new THREE.MeshBasicMaterial({ vertexColors: true })); world.add(tube);
+  const ghost = new THREE.LineSegments(routeGeo, new THREE.LineBasicMaterial({ vertexColors: true, opacity: .25, transparent: true, depthTest: false, depthWrite: false })); ghost.renderOrder = 3; world.add(ghost);
+  const lengths = [0];
+  for (let i = 1; i < vertices.length; i++) lengths.push(lengths[i-1] + vertices[i].distanceTo(vertices[i-1]));
+  const tubeSamples = Array.from({ length: tube.geometry.parameters.tubularSegments + 1 }, (_, i) =>
+    lengthSample(lengths, curve.getUtoTmapping(i / tube.geometry.parameters.tubularSegments) * lengths.at(-1)));
+  recolorRoute = () => {
+    const colors = pointColors.map(c => new THREE.Color(c).toArray());
+    routeGeo.setAttribute('color', new THREE.Float32BufferAttribute(lineColorValues(colors, colorMode), 3));
+    tube.geometry.setAttribute('color', new THREE.Float32BufferAttribute(tubeColorValues(colors, tubeSamples, tube.geometry.parameters.radialSegments, colorMode), 3));
+  };
+  recolorRoute();
   const marker = new THREE.Mesh(new THREE.SphereGeometry(extent * .005, 14, 10), new THREE.MeshBasicMaterial({ color: '#ffffff', depthTest: false })); marker.renderOrder = 5; marker.visible = false; world.add(marker);
   const labelDefinitions = D.landmarks.map((landmark, i) => ({ name: landmark.name, code: String(i + 1), p: points[landmark.index], index: landmark.index, landmark: i }));
   const maxIdx = points.reduce((best, p, i) => p[2] > points[best][2] ? i : best, 0);
@@ -236,7 +287,7 @@ async function flatFallback() {
   // Replace the WebGL canvas: an already-used canvas cannot create a 2D context.
   const old = $('map'), canvas = old.cloneNode(false); old.replaceWith(canvas);
   const c = canvas.getContext('2d'), img = new Image(); img.src = 'data/satellite.jpg'; await img.decode();
-  $('tools').hidden = true;
+  $('tools').hidden = true; recolorRoute = () => {};
   document.querySelector('.profile-foot span:first-child').textContent = '卫星俯视图 · 用剖面或地标列表定位';
   renderMap = () => {
     const dpr = Math.min(devicePixelRatio, 2); canvas.width = innerWidth * dpr; canvas.height = innerHeight * dpr; c.setTransform(dpr, 0, 0, dpr, 0, 0);
@@ -245,7 +296,7 @@ async function flatFallback() {
     const availableHeight = mobile ? $('side').getBoundingClientRect().top - 115 : innerHeight - 250;
     const scale = Math.min((innerWidth - (mobile ? 24 : 310)) / img.width, Math.max(50, availableHeight) / img.height);
     const w = img.width * scale, h = img.height * scale, x0 = innerWidth < 760 ? (innerWidth - w) / 2 : 310 + (innerWidth - 310 - w) / 2, y0 = mobile ? 100 : 10;
-    c.drawImage(img, x0, y0, w, h); c.beginPath(); points.forEach((p, i) => { const x = x0 + p[4] * w, y = y0 + p[5] * h; i ? c.lineTo(x, y) : c.moveTo(x, y); }); c.strokeStyle = color; c.lineWidth = 2; c.stroke();
+    c.drawImage(img, x0, y0, w, h); strokeRoute(c, p => [x0 + p[4] * w, y0 + p[5] * h], 2);
     D.landmarks.forEach((landmark, i) => { const p = points[landmark.index], x = x0 + p[4] * w, y = y0 + p[5] * h; c.fillStyle = '#6ee1db'; c.beginPath(); c.arc(x, y, 4, 0, 7); c.fill(); c.font = '11px system-ui'; c.fillText(`${i + 1} ${landmark.name.split('（')[0]}`, x + 7, y); });
     if (selection !== null) { const p = points[selection]; c.fillStyle = '#fff'; c.beginPath(); c.arc(x0 + p[4] * w, y0 + p[5] * h, 5, 0, 7); c.fill(); }
   };

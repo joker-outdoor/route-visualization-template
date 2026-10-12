@@ -14,9 +14,14 @@
 <div id="labels"></div>
 <header><p class="eyebrow">JOKER OUTDOOR / ROUTE ATLAS</p><h1 id="title">路线可视化</h1><p id="subtitle" class="subtitle"></p></header>
 <aside id="side" class="panel">
-<div class="route-heading"><span class="route-dot"></span><span id="route-heading">GPX 路线</span><span class="badge">GPX</span></div>
+<div class="route-heading"><span class="route-dot"></span><span id="route-heading">GPX 路线</span><span class="badge">路线</span></div>
 <div class="big-distance"><strong id="distance">—</strong><span>km <small>轨迹测算</small></span></div>
-<div class="stats"><div><small>累计爬升</small><strong id="gain">—</strong></div><div><small>最高海拔</small><strong id="max">—</strong></div><div><small>累计下降</small><strong id="loss">—</strong></div><div><small>记录用时</small><strong id="duration">—</strong></div></div>
+<div class="stats"><div><small>累计爬升</small><strong id="gain">—</strong></div><div><small>最高海拔</small><strong id="max">—</strong></div><div><small>累计下降</small><strong id="loss">—</strong></div><div><small id="duration-label">运动时间</small><strong id="duration">—</strong></div><div><small>平均配速</small><strong id="pace">—</strong></div><div><small id="pace-basis-label">配速里程口径</small><strong id="pace-basis">—</strong></div></div>
+<section id="color-controls" aria-label="路线着色">
+<div class="color-switch" role="group" aria-label="路线颜色"><button data-color="uniform" aria-pressed="true">统一</button><button data-color="elevation" aria-pressed="false">海拔</button><button data-color="speed" aria-pressed="false">速度</button></div>
+<p id="speed-note" hidden></p>
+<div id="color-legend" aria-live="polite"><span id="legend-low"></span><span id="legend-ramp"></span><span id="legend-high"></span><span id="legend-states" hidden><i class="missing-swatch"></i>缺失 / 长间隔 <i class="stopped-swatch"></i>停留</span></div>
+</section>
 <div class="divider"></div><h2 id="landmark-title">沿途地标</h2>
 <ol id="landmark-list"></ol>
 <p id="landmark-note" class="detail"></p>
