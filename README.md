@@ -72,3 +72,5 @@ node scripts/render_video.mjs --output /path/to/route-landscape.mp4 --width 1920
 ### 运动健康统计
 
 有已匹配的运动健康记录时，优先配置 `statsSource`、`stats.sourceDistanceKm`、`gainM`、`lossM`、`durationHours` 和 `pauseSeconds`。主里程展示有来源的配置运动距离，几何距离仍用于剖面定位。`durationHours` 为该活动起止跨度，`pauseSeconds` 为起止跨度减去 HealthKit 活动时长，因此不会再次扣除已排除的暂停；缺失统计显式置为 `null`。配置运动统计时不使用旧轨迹的 `SportAvgSpeed`。`trackSource` 标注坐标来源（例如运动健康 GPS），逐点速度仍由该轨迹坐标和时间差推算。不要用 GPS 海拔噪声累加替代 workout 的爬升汇总。
+
+默认 3D 全景与俯视均北向上；手动旋转后点击全景恢复北向上，3D 全景保留地形倾斜。

@@ -270,8 +270,8 @@ async function init3D() {
   function setPreset(value) {
     viewPreset = value; $('overview').setAttribute('aria-pressed', String(value === 'overview')); $('top').setAttribute('aria-pressed', String(value === 'top'));
   }
-  const overviewPosition = () => new THREE.Vector3(.8, 1.05, 1.3).multiplyScalar(extent * (innerWidth < 760 ? 2.3 : 1));
-  const topPosition = () => new THREE.Vector3(0, extent * (innerWidth < 760 ? 3.8 : 1.8), -.01);
+  const overviewPosition = () => new THREE.Vector3(0, 1.05, 1.5).multiplyScalar(extent * (innerWidth < 760 ? 2.3 : 1));
+  const topPosition = () => new THREE.Vector3(0, extent * (innerWidth < 760 ? 3.8 : 2.4), .01);
   function moveCamera(pos, target) {
     controls.autoRotate = false; $('rotate').setAttribute('aria-pressed', 'false');
     transition = { start: performance.now(), from: camera.position.clone(), to: pos, targetFrom: controls.target.clone(), targetTo: target };
