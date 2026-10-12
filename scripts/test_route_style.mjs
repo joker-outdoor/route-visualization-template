@@ -1,7 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import * as THREE from '../vendor/three.module.js';
-import { palette, speedAt, valueRange, pointColor, formatPace, formatDuration, speedReadout, lengthSample, tubeColorValues, segmentColors, lineColorValues } from '../route-style.js';
+import { palette, speedAt, valueRange, pointColor, formatPace, formatDuration, speedReadout, lengthSample, tubeColorValues, segmentColors, lineColorValues, endpointTitle, routeEndpoints, layoutEndpointLabels } from '../route-style.js';
 const data = { points: [[0, 0, 10], [1, 1, 20], [2, 2, 30], [3, 3, 30]], routeColor: '#f35b98', speedMps: [null, 0, 2, 4], speedState: ['missing', 'stopped', 'moving', 'moving'], speedUnit: 'm/s', speedSource: 'test timestamps' };
 test('uniform/elevation/speed share color endpoints, missing and stop states', () => {
   assert.equal(pointColor(data, 'uniform', 2), '#f35b98');
@@ -78,4 +78,48 @@ test('few speeds and a constant percentile range fall back to the actual range',
     assert.deepEqual(valueRange(route, 'speed'), [Math.min(...speeds), Math.max(...speeds)]);
     assert.match(pointColor(route, 'speed', 0), /^#[\da-f]{6}$/);
   }
+});
+
+test('endpoint identity uses exact first/last indices and configured Chinese names independently of route colors', () => {
+  const route = { ...data, startName: '北山街入口', finishName: '回到入口' };
+  const original = JSON.stringify(route);
+  const ends = routeEndpoints(route);
+  assert.equal(ends[0].index, 0); assert.equal(ends[1].index, route.points.length - 1);
+  assert.equal(ends[0].title, '起点 · 北山街入口'); assert.equal(ends[1].title, '终点 · 回到入口');
+  assert.equal(ends[0].shape, 'circle'); assert.equal(ends[1].shape, 'rect');
+  assert.notEqual(ends[0].color, ends[1].color);
+  for (const mode of ['uniform', 'elevation', 'speed']) {
+    pointColor(route, mode, 0);
+    assert.deepEqual(routeEndpoints({ ...route, routeColor: '#ffffff' }), ends);
+  }
+  assert.equal(JSON.stringify(route), original);
+  assert.equal(endpointTitle('start', '起点'), '起点'); assert.equal(endpointTitle('finish', undefined), '终点');
+});
+test('nearby or coincident endpoint labels stay separate on mobile and leaders retain exact anchors', () => {
+  const bounds = { left: 8, right: 382, top: 100, bottom: 415 };
+  const obstacle = { x: 265, y: 100, w: 113, h: 150 };
+  for (const delta of [0, 2]) {
+    const anchors = [{ kind: 'start', x: 260, y: 120, w: 100, h: 26 }, { kind: 'finish', x: 260 + delta, y: 120 + delta, w: 100, h: 26 }];
+    const original = JSON.stringify(anchors), boxes = layoutEndpointLabels(anchors, bounds, [obstacle]);
+    assert.ok(boxes.every(Boolean));
+    const intersects = (a,b) => a.x < b.x+b.w && a.x+a.w > b.x && a.y < b.y+b.h && a.y+a.h > b.y;
+    assert.equal(intersects(boxes[0], boxes[1]), false);
+    boxes.forEach((box,i) => {
+      assert.equal(intersects(box, obstacle), false);
+      assert.ok(box.x >= bounds.left && box.x+box.w <= bounds.right && box.y >= bounds.top && box.y+box.h <= bounds.bottom);
+      assert.equal(box.leader.x1, anchors[i].x); assert.equal(box.leader.y1, anchors[i].y);
+      assert.ok(box.leader.x2 >= box.x && box.leader.x2 <= box.x+box.w);
+      assert.ok(box.leader.y2 >= box.y && box.leader.y2 <= box.y+box.h);
+    });
+    assert.equal(JSON.stringify(anchors), original);
+  }
+});
+test('edge-of-map endpoints keep bounded labels without moving marker coordinates', () => {
+  const anchors = [{ kind: 'start', x: 10, y: 105, w: 140, h: 26 }, { kind: 'finish', x: 377, y: 410, w: 140, h: 26 }];
+  const bounds = { left: 8, right: 382, top: 100, bottom: 415 };
+  const boxes = layoutEndpointLabels(anchors, bounds);
+  boxes.forEach((box,i) => {
+    assert.ok(box && box.x >= 8 && box.x+box.w <= 382 && box.y >= 100 && box.y+box.h <= 415);
+    assert.deepEqual([box.leader.x1, box.leader.y1], [anchors[i].x, anchors[i].y]);
+  });
 });

@@ -68,3 +68,7 @@ node scripts/render_video.mjs --output /path/to/route-landscape.mp4 --width 1920
 默认 1080×1920、30 fps、46 秒、无音轨，输出 H.264 / yuv420p / faststart MP4。`--width` / `--height` / `--fps` / `--duration` 可调整；已有文件拒绝覆盖。若复用外部已安装的依赖，可传 `--playwright /absolute/path/to/playwright/index.mjs`。
 
 先用 `--duration 2` 做短片试验，再输出正式片；检查开场、中段、结尾的轨迹方向、地标、里程、海拔、字幕遮挡和黑屏。脚本验证起终点及 ffprobe 编码、分辨率、帧数、时长；视觉验收另做。MP4 可放 `videos/` 后在 README 或页面添加播放、下载链接，保留具体项目生成器版本。
+
+### 运动健康统计
+
+有已匹配的运动健康记录时，优先配置 `statsSource`、`stats.sourceDistanceKm`、`gainM`、`lossM`、`durationHours` 和 `pauseSeconds`。主里程展示有来源的配置运动距离，几何距离仍用于剖面定位。`durationHours` 为该活动起止跨度，`pauseSeconds` 为起止跨度减去 HealthKit 活动时长，因此不会再次扣除已排除的暂停；缺失统计显式置为 `null`。配置运动统计时不使用旧轨迹的 `SportAvgSpeed`。`trackSource` 标注坐标来源（例如运动健康 GPS），逐点速度仍由该轨迹坐标和时间差推算。不要用 GPS 海拔噪声累加替代 workout 的爬升汇总。

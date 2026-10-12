@@ -155,7 +155,7 @@ def parse_track(gpx, config):
     moving = stats['movingSeconds']
     if moving is not None and moving > 0 and stats['paceDistanceKm'] > 0:
         computed = stats['paceDistanceKm'] * 1000 / moving
-        recorded_speed = optional('SportAvgSpeed') if tbulu else None
+        recorded_speed = optional('SportAvgSpeed') if tbulu and not any(k in overrides for k in ('sourceDistanceKm', 'durationHours', 'pauseSeconds')) else None
         # Accept the exporter's aggregate speed only when its distance/time units agree.
         if recorded_speed is not None and (recorded_speed <= 0 or not math.isclose(recorded_speed, computed, rel_tol=.01)):
             raise ValueError('Recorded average speed disagrees with moving duration and source distance')
@@ -172,7 +172,8 @@ def parse_track(gpx, config):
             'madeOn':made, 'recordedOn':recorded, 'points':pts, 'stats':stats,
             'routeColor':config.get('routeColor','#b9ef69'),
             'speedMps':speed_mps, 'speedState':speed_state, 'speedUnit':'m/s',
-            'speedSource':'坐标与相邻时间差推算；间隔超过 30 秒不计速度，低于 0.5 m/s 标记为停留',
+            'speedSource':config.get('trackSource','轨迹') + '坐标与相邻时间差推算；间隔超过 30 秒不计速度，低于 0.5 m/s 标记为停留',
+            'activityDistanceSource':config['statsSource'] if overrides.get('sourceDistanceKm') is not None else '',
             'movingTimeSource':('未提供可靠暂停统计' if pause is None else config['statsSource'] if 'pauseSeconds' in overrides else
                                 '两步路 KML 汇总：总耗时减 PauseTime（毫秒）'),
             'statsSource':config.get('statsSource','原轨迹扩展字段或完整时间记录；缺失项未提供'),

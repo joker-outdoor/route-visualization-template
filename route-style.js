@@ -76,3 +76,35 @@ export function tubeColorValues(colors, samples, radialSegments, mode = 'elevati
   }
   return values;
 }
+
+export function endpointTitle(kind, name) {
+  const role = kind === 'start' ? '起点' : '终点';
+  return typeof name === 'string' && name.trim() && name !== role ? `${role} · ${name}` : role;
+}
+export function routeEndpoints(data) {
+  return [
+    { kind: 'start', index: 0, title: endpointTitle('start', data.startName), color: '#62e3ab', shape: 'circle' },
+    { kind: 'finish', index: data.points.length - 1, title: endpointTitle('finish', data.finishName), color: '#ffd166', shape: 'rect' }
+  ];
+}
+// Move only label boxes; every leader starts at the unmodified projected track point.
+export function layoutEndpointLabels(anchors, bounds, obstacles = []) {
+  const overlaps = (a, b) => a.x < b.x + b.w + 6 && a.x + a.w + 6 > b.x && a.y < b.y + b.h + 6 && a.y + a.h + 6 > b.y;
+  const occupied = [...obstacles, ...anchors.map(p => ({ x: p.x - 10, y: p.y - 10, w: 20, h: 20 }))];
+  return anchors.map(p => {
+    const left = p.x - p.w - 20, right = p.x + 20;
+    const side = p.kind === 'start' ? left : right, other = p.kind === 'start' ? right : left;
+    const candidates = [[side, p.y - p.h - 20], [side, p.y + 20], [p.x - p.w / 2, p.y - p.h - 34], [p.x - p.w / 2, p.y + 34], [other, p.y - p.h - 20], [other, p.y + 20]];
+    for (let y = bounds.top; y + p.h <= bounds.bottom; y += p.h + 8) {
+      for (const x of [p.x - p.w / 2, bounds.left, bounds.right - p.w]) candidates.push([x, y]);
+    }
+    if (p.w > bounds.right - bounds.left || p.h > bounds.bottom - bounds.top) return null;
+    for (const [x, y] of candidates) {
+      const box = { x: Math.max(bounds.left, Math.min(bounds.right - p.w, x)), y: Math.max(bounds.top, Math.min(bounds.bottom - p.h, y)), w: p.w, h: p.h };
+      if (occupied.some(rect => overlaps(box, rect))) continue;
+      occupied.push(box);
+      return { ...box, leader: { x1: p.x, y1: p.y, x2: Math.max(box.x, Math.min(box.x + box.w, p.x)), y2: Math.max(box.y, Math.min(box.y + box.h, p.y)) } };
+    }
+    return null;
+  });
+}

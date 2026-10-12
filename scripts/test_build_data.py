@@ -102,6 +102,19 @@ class MotionTests(unittest.TestCase):
         d=parse_track(self.p,self.config)
         self.assertAlmostEqual(d['stats']['movingSeconds'],100)
         self.assertEqual(d['movingTimeSource'],self.config['statsSource'])
+    def test_authoritative_health_statistics_override_exporter_summary(self):
+        self.kml(summary={'Distance':100,'BeginTime':1000,'EndTime':5000,'PauseTime':1000,'SportAvgSpeed':999})
+        elapsed=8297.062163114548; moving=7487.084210991859
+        self.config.update(statsSource='运动健康（Apple Watch）', trackSource='运动健康 GPS', stats={
+            'sourceDistanceKm':22.158867217122047,'gainM':116.66,'lossM':None,
+            'durationHours':elapsed/3600,'pauseSeconds':elapsed-moving})
+        out=Path(self.tmp.name)/'data'; d=build(self.p,self.config,out,True)
+        self.assertAlmostEqual(d['stats']['movingSeconds'],moving)
+        self.assertAlmostEqual(d['stats']['avgPaceSecondsKm'],337.8820829436004)
+        self.assertEqual(d['stats']['gainM'],116.66);self.assertIsNone(d['stats']['lossM'])
+        self.assertEqual(d['activityDistanceSource'],self.config['statsSource'])
+        self.assertEqual(d['movingTimeSource'],self.config['statsSource'])
+        self.assertIn('运动健康 GPS',d['speedSource']);check(out)
     def test_missing_times_and_long_intervals_keep_point_alignment(self):
         coords=[(120.15+i*.00001,30.26,10) for i in range(6)]
         # A missing value invalidates both adjacent intervals; a zero interval is unknown too.

@@ -1,6 +1,6 @@
 import * as THREE from 'three';
 import { OrbitControls } from './vendor/OrbitControls.js';
-import { palette, speedAt, valueRange, pointColor, formatPace, formatDuration, speedReadout, lengthSample, tubeColorValues, segmentColors, lineColorValues } from './route-style.js';
+import { palette, speedAt, valueRange, pointColor, formatPace, formatDuration, speedReadout, lengthSample, tubeColorValues, segmentColors, lineColorValues, endpointTitle, routeEndpoints, layoutEndpointLabels } from './route-style.js';
 
 const $ = id => document.getElementById(id);
 let color = '#b9ef69', colorMode = 'uniform', pointColors = [], recolorRoute = () => {};
@@ -8,6 +8,7 @@ const reducedMotion = matchMedia('(prefers-reduced-motion: reduce)').matches;
 let D, T, points, selection = null, selectedLandmark = null, renderMap = () => {}, focus = () => {};
 const chart = $('chart'), ctx = chart.getContext('2d');
 const markerLabels = [];
+let endpointMarkers = [];
 
 function nearest(km) {
   let lo = 0, hi = points.length - 1;
@@ -22,7 +23,7 @@ function select(index, landmark = null, showCard = false) {
     const p = points[index];
     $('readout').textContent = `${p[3].toFixed(2)} km · ${Math.round(p[2])} m · ${speedReadout(D, index)}${landmark !== null ? ' · ' + D.landmarks[landmark].name : ''}`;
     if (showCard) {
-      $('point-name').textContent = landmark !== null ? D.landmarks[landmark].name : index === 0 ? '起点' : index === points.length - 1 ? '终点' : '轨迹最高点';
+      $('point-name').textContent = landmark !== null ? D.landmarks[landmark].name : index === 0 ? endpointTitle('start', D.startName) : index === points.length - 1 ? endpointTitle('finish', D.finishName) : '轨迹最高点';
       $('point-detail').textContent = `${p[3].toFixed(2)} km / 海拔 ${Math.round(p[2])} m · ${speedReadout(D, index)}${landmark !== null ? ' · ' + D.landmarks[landmark].positionSource : ''}`;
       $('point-card').hidden = false;
     }
@@ -81,6 +82,50 @@ chart.addEventListener('keydown', e => {
 });
 $('close-card').onclick = () => { $('point-card').hidden = true; };
 
+function createEndpointMarkers() {
+  if (endpointMarkers[0]?.el.isConnected) return;
+  const ns = 'http://www.w3.org/2000/svg';
+  const svg = document.createElementNS(ns, 'svg'); svg.classList.add('endpoint-overlay'); svg.setAttribute('aria-hidden', 'true'); $('labels').append(svg);
+  endpointMarkers = routeEndpoints(D).map(item => {
+    const group = document.createElementNS(ns, 'g'), leader = document.createElementNS(ns, 'line'), pin = document.createElementNS(ns, item.shape);
+    group.setAttribute('stroke', item.color); group.setAttribute('stroke-width', '2');
+    pin.setAttribute('fill', '#0a1218');
+    if (item.shape === 'circle') pin.setAttribute('r', '7');
+    else { pin.setAttribute('width', '8'); pin.setAttribute('height', '8'); }
+    group.append(leader, pin); svg.append(group);
+    const el = document.createElement('button'); el.className = `map-label endpoint endpoint-${item.kind}`;
+    el.style.setProperty('--endpoint-color', item.color); el.title = item.title; el.setAttribute('aria-label', item.title);
+    const badge = document.createElement('b'); badge.textContent = item.kind === 'start' ? '起' : '终';
+    const text = document.createElement('span'); text.textContent = item.title; el.append(badge, text);
+    el.onclick = () => { select(item.index, null, true); focus(points[item.index]); };
+    $('labels').append(el);
+    return { ...item, el, group, leader, pin };
+  });
+}
+function renderEndpointMarkers(projected) {
+  const mobile = innerWidth < 760;
+  const bounds = { left: 8, right: innerWidth - 8, top: document.querySelector('header').getBoundingClientRect().bottom + 8,
+    bottom: Math.min($('profile').getBoundingClientRect().top, mobile ? $('side').getBoundingClientRect().top : innerHeight) - 8 };
+  const obstacles = ['side', 'tools', 'point-card'].map(id => $(id).getBoundingClientRect()).filter(r => r.width && r.height).map(r => ({ x: r.left, y: r.top, w: r.width, h: r.height }));
+  const visible = [];
+  endpointMarkers.forEach((item, i) => {
+    const p = projected[i], onScreen = p.visible !== false && p.x >= 0 && p.x <= innerWidth && p.y >= 0 && p.y <= innerHeight;
+    item.el.hidden = !onScreen; item.group.style.display = onScreen ? '' : 'none';
+    if (!onScreen) return;
+    visible.push({ ...p, kind: item.kind, w: item.el.offsetWidth, h: item.el.offsetHeight, item });
+  });
+  const boxes = layoutEndpointLabels(visible, bounds, obstacles);
+  visible.forEach((p, i) => {
+    const { item } = p, box = boxes[i];
+    if (item.shape === 'circle') { item.pin.setAttribute('cx', p.x); item.pin.setAttribute('cy', p.y); }
+    else { item.pin.setAttribute('x', p.x - 4); item.pin.setAttribute('y', p.y - 4); }
+    item.el.hidden = !box; item.leader.style.display = box ? '' : 'none';
+    if (!box) return;
+    item.el.style.transform = `translate(${box.x}px,${box.y}px)`;
+    for (const [key, value] of Object.entries(box.leader)) item.leader.setAttribute(key, value);
+  });
+  return boxes.filter(Boolean).map(b => ({ x: b.x + b.w / 2, y: b.y + b.h, w: b.w, h: b.h }));
+}
 function strokeRoute(context, xy, width) {
   context.lineWidth = width;
   if (colorMode === 'uniform') {
@@ -117,7 +162,9 @@ function fillDetails() {
   $('title').textContent = D.title; $('subtitle').textContent = D.subtitle;
   $('route-heading').textContent = D.routeLabel; $('map').setAttribute('aria-label', `${D.title}路线地图`);
   document.querySelector('meta[name="description"]').content = `${D.title} · GPX 路线与海拔剖面`;
-  $('distance').textContent = D.stats.distanceKm.toFixed(2);
+  const activityDistance = D.activityDistanceSource && Number.isFinite(D.stats.sourceDistanceKm);
+  $('distance').textContent = (activityDistance ? D.stats.sourceDistanceKm : D.stats.distanceKm).toFixed(2);
+  $('distance-source').textContent = activityDistance ? D.activityDistanceSource : '轨迹测算';
   for (const [id, key] of [['gain', 'gainM'], ['loss', 'lossM'], ['max', 'maxM']]) {
     $(id).replaceChildren(document.createTextNode(D.stats[key] === null ? '未提供' : Math.round(D.stats[key]).toLocaleString('en-US') + ' '));
     if (D.stats[key] !== null) { const unit = document.createElement('em'); unit.textContent = 'm'; $(id).append(unit); }
@@ -136,7 +183,7 @@ function fillDetails() {
   setColorMode('uniform');
   $('landmark-title').textContent = D.landmarkTitle;
   $('landmark-note').textContent = D.landmarkNote;
-  $('data-note').textContent = `路线距离按坐标测算；爬升与下降：${D.statsSource}。运动计时：${D.movingTimeSource || '未提供可靠暂停统计'}。${D.stats.avgPaceSecondsKm > 0 ? '平均配速按运动时间和上述配速里程计算。' : '暂停统计不足，未计算运动配速。'}逐点速度：${D.speedSource || '未提供'}。剖面保留轨迹海拔，3D 路线贴合 DEM。`;
+  $('data-note').textContent = `路线几何长度 ${D.stats.distanceKm.toFixed(2)} km，按坐标测算；运动统计：${D.statsSource}。运动计时：${D.movingTimeSource || '未提供可靠暂停统计'}。${D.stats.avgPaceSecondsKm > 0 ? '平均配速按运动时间和上述配速里程计算。' : '暂停统计不足，未计算运动配速。'}逐点速度：${D.speedSource || '未提供'}。剖面保留轨迹海拔，3D 路线贴合 DEM。`;
   $('record-date').textContent = 'WGS84';
   $('download').download = `${D.title}.gpx`;
   $('imagery-credit').textContent = D.imageryCredit;
@@ -208,7 +255,7 @@ async function init3D() {
   const marker = new THREE.Mesh(new THREE.SphereGeometry(extent * .005, 14, 10), new THREE.MeshBasicMaterial({ color: '#ffffff', depthTest: false })); marker.renderOrder = 5; marker.visible = false; world.add(marker);
   const labelDefinitions = D.landmarks.map((landmark, i) => ({ name: landmark.name, code: String(i + 1), p: points[landmark.index], index: landmark.index, landmark: i }));
   const maxIdx = points.reduce((best, p, i) => p[2] > points[best][2] ? i : best, 0);
-  labelDefinitions.push({ name: D.startName, code: '起', p: points[0], index: 0, cls: 'endpoint' }, { name: D.finishName, code: '终', p: points.at(-1), index: points.length - 1, cls: 'endpoint' }, { name: `${Math.round(D.stats.maxM)} m`, code: '▲', p: points[maxIdx], index: maxIdx, cls: 'peak' });
+  labelDefinitions.push({ name: `${Math.round(D.stats.maxM)} m`, code: '▲', p: points[maxIdx], index: maxIdx, cls: 'peak' });
   for (const item of labelDefinitions) {
     const p = routePosition(item.p), top = p.clone(); top.y += extent * .015;
     const pole = new THREE.Line(new THREE.BufferGeometry().setFromPoints([p, top]), new THREE.LineBasicMaterial({ color: '#d4f7ef', transparent: true, opacity: .5 })); world.add(pole);
@@ -218,6 +265,7 @@ async function init3D() {
     el.onclick = () => { select(item.index, item.landmark ?? null, true); focus(item.p); };
     $('labels').append(el); markerLabels.push({ ...item, el, top });
   }
+  createEndpointMarkers();
   let transition = null, viewPreset = 'overview', narrow = innerWidth < 760;
   function setPreset(value) {
     viewPreset = value; $('overview').setAttribute('aria-pressed', String(value === 'overview')); $('top').setAttribute('aria-pressed', String(value === 'top'));
@@ -263,7 +311,10 @@ async function init3D() {
     }
     if (selection !== null) { marker.visible = true; marker.position.copy(routePosition(points[selection])); } else marker.visible = false;
     controls.update(); renderer.render(scene, camera);
-    const placed = [];
+    const placed = renderEndpointMarkers(endpointMarkers.map(item => {
+      const p = routePosition(points[item.index]).applyMatrix4(world.matrixWorld).project(camera);
+      return { x: (p.x + 1) * innerWidth / 2, y: (1 - p.y) * innerHeight / 2, visible: p.z >= -1 && p.z <= 1 };
+    }));
     for (const item of markerLabels) {
       v.copy(item.top).applyMatrix4(world.matrixWorld).project(camera);
       if (v.z < -1 || v.z > 1 || Math.abs(v.x) > 1.2 || Math.abs(v.y) > 1.2) { item.el.hidden = true; continue; }
@@ -287,7 +338,8 @@ async function flatFallback() {
   // Replace the WebGL canvas: an already-used canvas cannot create a 2D context.
   const old = $('map'), canvas = old.cloneNode(false); old.replaceWith(canvas);
   const c = canvas.getContext('2d'), img = new Image(); img.src = 'data/satellite.jpg'; await img.decode();
-  $('tools').hidden = true; recolorRoute = () => {};
+  $('tools').hidden = true; recolorRoute = () => {}; focus = () => {};
+  createEndpointMarkers();
   document.querySelector('.profile-foot span:first-child').textContent = '卫星俯视图 · 用剖面或地标列表定位';
   renderMap = () => {
     const dpr = Math.min(devicePixelRatio, 2); canvas.width = innerWidth * dpr; canvas.height = innerHeight * dpr; c.setTransform(dpr, 0, 0, dpr, 0, 0);
@@ -299,6 +351,7 @@ async function flatFallback() {
     c.drawImage(img, x0, y0, w, h); strokeRoute(c, p => [x0 + p[4] * w, y0 + p[5] * h], 2);
     D.landmarks.forEach((landmark, i) => { const p = points[landmark.index], x = x0 + p[4] * w, y = y0 + p[5] * h; c.fillStyle = '#6ee1db'; c.beginPath(); c.arc(x, y, 4, 0, 7); c.fill(); c.font = '11px system-ui'; c.fillText(`${i + 1} ${landmark.name.split('（')[0]}`, x + 7, y); });
     if (selection !== null) { const p = points[selection]; c.fillStyle = '#fff'; c.beginPath(); c.arc(x0 + p[4] * w, y0 + p[5] * h, 5, 0, 7); c.fill(); }
+    renderEndpointMarkers(endpointMarkers.map(item => ({ x: x0 + points[item.index][4] * w, y: y0 + points[item.index][5] * h })));
   };
   addEventListener('resize', () => { renderMap(); drawProfile(); }); renderMap();
 }
