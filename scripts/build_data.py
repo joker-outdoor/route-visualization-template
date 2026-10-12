@@ -1,4 +1,4 @@
-"""Build local terrain / imagery and a privacy-minimized GPX from a supplied track."""
+"""Build local terrain / imagery and a privacy-minimized GPX from a supplied GPX or KML track."""
 import argparse, io, json, math, tempfile, urllib.request, xml.etree.ElementTree as ET
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
@@ -39,22 +39,73 @@ def finite(value, name):
     if not math.isfinite(number): raise ValueError(f'{name} must be finite')
     return number
 
-def parse_track(gpx, config):
+def read_track(source):
     from datetime import datetime
-    root = ET.parse(gpx).getroot()
-    segments = root.findall('.//{*}trkseg')
-    if len(segments) != 1: raise ValueError('Expected one continuous trkseg; split disconnected GPX segments before rendering')
-    pts = []
-    times = []
-    for p in segments[0].findall('{*}trkpt'):
-        lon, lat = finite(p.attrib['lon'], 'longitude'), finite(p.attrib['lat'], 'latitude')
-        if not (-180 < lon < 180 and -85 < lat < 85): raise ValueError('Coordinates exceed supported Web Mercator region')
-        ele = p.find('{*}ele')
-        if ele is None or not ele.text: raise ValueError('GPX elevation is missing; obtain elevations before rendering a profile')
-        pts.append([lon, lat, finite(ele.text, 'elevation')])
-        stamp = p.find('{*}time')
-        if stamp is not None and stamp.text:
-            times.append(datetime.fromisoformat(stamp.text.replace('Z', '+00:00')))
+    root = ET.parse(source).getroot()
+    kml = root.tag == '{http://www.opengis.net/kml/2.2}kml'
+    if kml:
+        tracks = root.findall('.//{http://www.google.com/kml/ext/2.2}Track')
+        if len(tracks) != 1: raise ValueError('Expected one continuous gx:Track; split disconnected tracks before rendering')
+        track = tracks[0]
+        coords = [el.text.split() if el.text else [] for el in track.findall('{http://www.google.com/kml/ext/2.2}coord')]
+        if any(len(row) != 3 for row in coords): raise ValueError('KML coordinate/elevation is missing')
+        stamps = [el.text for el in track.findall('{http://www.opengis.net/kml/2.2}when')]
+        if stamps and len(stamps) != len(coords): raise ValueError('KML timestamps must align with coordinates')
+        if not stamps: stamps = [None] * len(coords)
+        document = root.find('{*}Document')
+        extensions = [track.find('{*}ExtendedData'), document.find('{*}ExtendedData') if document is not None else None]
+        tbulu = document is not None and document.get('id') == 'TbuluKmlVersion2'
+    else:
+        if root.tag.split('}')[-1] != 'gpx': raise ValueError('Expected GPX or KML input')
+        segments = root.findall('.//{*}trkseg')
+        if len(segments) != 1: raise ValueError('Expected one continuous trkseg; split disconnected GPX segments before rendering')
+        track = next(t for t in root.findall('{*}trk') if segments[0] in list(t))
+        coords, stamps = [], []
+        for p in segments[0].findall('{*}trkpt'):
+            ele = p.findtext('{*}ele')
+            if not ele: raise ValueError('GPX elevation is missing; obtain elevations before rendering a profile')
+            coords.append([p.attrib['lon'], p.attrib['lat'], ele])
+            stamps.append(p.findtext('{*}time'))
+        extensions = [track.find('{*}extensions'), root.find('{*}extensions')]
+        tbulu = False
+    pts = [[finite(row[0], 'longitude'), finite(row[1], 'latitude'), finite(row[2], 'elevation')] for row in coords]
+    if any(not (-180 < p[0] < 180 and -85 < p[1] < 85) for p in pts):
+        raise ValueError('Coordinates exceed supported Web Mercator region')
+    times = [datetime.fromisoformat(t.replace('Z', '+00:00')) if t else None for t in stamps]
+    known = [t for t in times if t is not None]
+    if any(t.utcoffset() is None for t in known): raise ValueError('Track timestamps need a timezone')
+    if any(a > b for a, b in zip(known, known[1:])): raise ValueError('Track timestamps must be ordered')
+    def ext(key):
+        # Never decode opaque exporter arrays such as GxTrackExtendedData as measured speed.
+        for extension in extensions:
+            if extension is None: continue
+            if kml:
+                el = next((e for e in extension.findall('{*}Data') if e.get('name') == key), None)
+                value = el.findtext('{*}value') if el is not None else None
+            else:
+                value = extension.findtext('{*}' + key)
+            if value: return value
+        return None
+    return pts, times, ext, tbulu
+
+
+def inferred_speeds(pts, times):
+    speeds, states = [None] * len(pts), ['missing'] * len(pts)
+    for i in range(1, len(pts)):
+        if times[i] is None or times[i-1] is None: continue
+        seconds = (times[i] - times[i-1]).total_seconds()
+        if seconds <= 0: continue
+        if seconds > 30:
+            states[i] = 'gap'
+            continue
+        speed = distance(pts[i-1], pts[i]) * 1000 / seconds
+        speeds[i] = round(speed, 6)
+        states[i] = 'stopped' if speed < .5 else 'moving'
+    return speeds, states
+
+
+def parse_track(gpx, config):
+    pts, times, ext, tbulu = read_track(gpx)
     if not 2 <= len(pts) <= 20000: raise ValueError('Expected 2–20000 track points; simplify larger tracks first')
     km = 0
     for i, p in enumerate(pts):
@@ -76,14 +127,6 @@ def parse_track(gpx, config):
     if max(w/h,h/w) > 8: raise ValueError('Very narrow route extent; split it or supply a less elongated track')
     for p in pts:
         x,y = merc(p[0],p[1]); p.extend([round((x-mx0)/(mx1-mx0),8), round((y-my0)/(my1-my0),8)])
-    track = next(t for t in root.findall('{*}trk') if segments[0] in list(t))
-    extensions = [track.find('{*}extensions'), root.find('{*}extensions')]
-    def ext(key):
-        # The selected track takes precedence; absent fields fall back to the GPX root.
-        for extension in extensions:
-            el = extension.find('{*}'+key) if extension is not None else None
-            if el is not None and el.text: return el.text
-        return None
     def optional(key):
         val = ext(key)
         return finite(val,key) if val else None
@@ -92,26 +135,48 @@ def parse_track(gpx, config):
     if stats['sourceDistanceKm'] is not None: stats['sourceDistanceKm'] /= 1000
     begin,end = optional('BeginTime'),optional('EndTime')
     if begin is not None and end is not None and end >= begin: stats['durationHours'] = (end-begin)/3600000
-    elif len(times)==len(pts):
-        if any(a>b for a,b in zip(times,times[1:])): raise ValueError('Track timestamps must be ordered')
+    elif all(t is not None for t in times):
         stats['durationHours'] = (times[-1]-times[0]).total_seconds()/3600
+    stats['pauseSeconds'] = optional('PauseTime') / 1000 if tbulu and optional('PauseTime') is not None else None
     # Explicit editorial statistics have a separately displayed source, not fabricated GPX metadata.
     overrides = config.get('stats', {})
     if overrides and not config.get('statsSource'): raise ValueError('statsSource required for configured statistics')
     for key,val in overrides.items():
-        if key not in ('gainM','lossM','durationHours','sourceDistanceKm'): raise ValueError(f'Unsupported statistics override: {key}')
+        if key not in ('gainM','lossM','durationHours','sourceDistanceKm','pauseSeconds'): raise ValueError(f'Unsupported statistics override: {key}')
         stats[key] = finite(val,key) if val is not None else None
     if any(v is not None and v < 0 for k,v in stats.items() if k not in ('minM','maxM')):
         raise ValueError('Distance, duration, gain and loss cannot be negative')
+    elapsed = stats['durationHours'] * 3600 if stats['durationHours'] is not None else None
+    pause = stats['pauseSeconds']
+    if pause is not None and (elapsed is None or pause > elapsed): raise ValueError('Pause duration exceeds or lacks elapsed duration')
+    stats['movingSeconds'] = elapsed - pause if elapsed is not None and pause is not None else None
+    stats['avgSpeedMps'] = stats['avgPaceSecondsKm'] = None
+    stats['paceDistanceKm'] = stats['sourceDistanceKm'] if stats['sourceDistanceKm'] is not None else km
+    moving = stats['movingSeconds']
+    if moving is not None and moving > 0 and stats['paceDistanceKm'] > 0:
+        computed = stats['paceDistanceKm'] * 1000 / moving
+        recorded_speed = optional('SportAvgSpeed') if tbulu and not any(k in overrides for k in ('sourceDistanceKm', 'durationHours', 'pauseSeconds')) else None
+        # Accept the exporter's aggregate speed only when its distance/time units agree.
+        if recorded_speed is not None and (recorded_speed <= 0 or not math.isclose(recorded_speed, computed, rel_tol=.01)):
+            raise ValueError('Recorded average speed disagrees with moving duration and source distance')
+        stats['avgSpeedMps'] = recorded_speed if recorded_speed is not None else computed
+        stats['avgPaceSecondsKm'] = moving / stats['paceDistanceKm']
+    speed_mps, speed_state = inferred_speeds(pts, times)
     from datetime import date
     made = config.get('madeOn')
     if not made: raise ValueError('madeOn is required; never infer an activity date from the filename')
     date.fromisoformat(made)
-    recorded = config.get('recordedOn', times[0].date().isoformat() if times else None)
+    recorded = config.get('recordedOn', times[0].date().isoformat() if times and times[0] is not None else None)
     if recorded: date.fromisoformat(recorded)
     data = {'title':config['title'], 'subtitle':config.get('subtitle',''), 'routeLabel':config.get('routeLabel','单线 GPX 路线'),
             'madeOn':made, 'recordedOn':recorded, 'points':pts, 'stats':stats,
-            'statsSource':config.get('statsSource','GPX 扩展字段或完整时间记录；缺失项未提供'),
+            'routeColor':config.get('routeColor','#b9ef69'),
+            'speedMps':speed_mps, 'speedState':speed_state, 'speedUnit':'m/s',
+            'speedSource':config.get('trackSource','轨迹') + '坐标与相邻时间差推算；间隔超过 30 秒不计速度，低于 0.5 m/s 标记为停留',
+            'activityDistanceSource':config['statsSource'] if overrides.get('sourceDistanceKm') is not None else '',
+            'movingTimeSource':('未提供可靠暂停统计' if pause is None else config['statsSource'] if 'pauseSeconds' in overrides else
+                                '两步路 KML 汇总：总耗时减 PauseTime（毫秒）'),
+            'statsSource':config.get('statsSource','原轨迹扩展字段或完整时间记录；缺失项未提供'),
             'startName':config.get('startName',ext('PosStartName') or '起点'), 'finishName':config.get('finishName',ext('PosEndName') or '终点'),
             'bounds':{'lon0':lon0,'lon1':lon1,'lat0':lat0,'lat1':lat1,'mercator':[mx0,my0,mx1,my1]}, 'widthKm':w,'heightKm':h,
             'landmarkTitle':config.get('landmarkTitle','沿途地标'), 'landmarkNote':config.get('landmarkNote','标注里程对应邻近轨迹点，点击查看位置。'),
@@ -119,6 +184,8 @@ def parse_track(gpx, config):
             'terrainUrl':'https://github.com/tilezen/joerd',
             'imageryCredit':'Imagery © Esri, Maxar, Earthstar Geographics, and the GIS User Community',
             'terrainCredit':'Terrain · Mapzen; SRTM / GMTED2010 courtesy of USGS', 'landmarks':[]}
+    import re
+    if not isinstance(data['routeColor'],str) or not re.fullmatch(r'#[0-9a-fA-F]{6}',data['routeColor']): raise ValueError('routeColor must be a six-digit hex color')
     if not isinstance(data['title'],str) or not data['title'].strip(): raise ValueError('title must be a nonempty string')
     for mark in config.get('landmarks',[]):
         if not isinstance(mark.get('name'),str) or not mark['name'].strip() or not mark.get('positionSource'):

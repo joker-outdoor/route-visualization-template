@@ -23,6 +23,20 @@ def check(directory):
     assert t['w']>=2 and t['h']>=2 and len(t['elevations'])==t['w']*t['h']
     assert all(math.isfinite(e) for e in t['elevations'])
     assert all(type(m['index']) is int and 0<=m['index']<len(p) and m['positionSource'] for m in d['landmarks'])
+    if 'speedMps' in d:
+        assert d['speedUnit']=='m/s' and d['speedSource']
+        assert len(d['speedMps'])==len(p) and len(d['speedState'])==len(p)
+        for speed,state in zip(d['speedMps'],d['speedState']):
+            assert state in {'moving','stopped','missing','gap'}
+            assert speed is None or (type(speed) in (float,int) and math.isfinite(speed) and speed>=0)
+            assert (speed is None)==(state in {'missing','gap'})
+    stats=d['stats']
+    if stats.get('movingSeconds') is not None:
+        assert 0<=stats['pauseSeconds']<=stats['durationHours']*3600
+        assert abs(stats['movingSeconds']+stats['pauseSeconds']-stats['durationHours']*3600)<1e-6
+        if stats['movingSeconds']>0 and stats['paceDistanceKm']>0:
+            assert math.isfinite(stats['avgPaceSecondsKm']) and stats['avgPaceSecondsKm']>0
+            assert abs(stats['avgPaceSecondsKm']*stats['paceDistanceKm']-stats['movingSeconds'])<1e-6
     g=ET.parse(directory/'route.gpx').getroot()
     assert {el.tag.split('}')[-1] for el in g.iter()} <= {'gpx','trk','name','trkseg','trkpt','ele'}
     gp=g.findall('.//{*}trkpt');assert len(gp)==len(p)
