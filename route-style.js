@@ -1,5 +1,6 @@
 // Shared by 3D, 2D and the profile; speeds describe the interval ending at each point.
 export const palette = { low: '#55bdd6', high: '#ffbf69', missing: '#82909a', stopped: '#edf4ef' };
+export const speedPalette = ['#ef4444', '#facc15', '#22c55e'];
 export function speedAt(data, index) {
   if (data.speedUnit !== 'm/s' || !data.speedSource || !Array.isArray(data.speedMps) || data.speedMps.length !== data.points.length) return { value: null, state: 'missing' };
   const value = data.speedMps[index];
@@ -21,18 +22,19 @@ export function valueRange(data, mode) {
   const display = [quantile(.05), quantile(.95)];
   return display[0] < display[1] ? display : actual;
 }
-export function rampColor(value, range) {
+export function rampColor(value, range, stops = [palette.low, palette.high]) {
   if (!Number.isFinite(value)) return palette.missing;
   const fraction = range[0] === range[1] ? .5 : Math.max(0, Math.min(1, (value - range[0]) / (range[1] - range[0])));
   const bytes = hex => [1, 3, 5].map(i => parseInt(hex.slice(i, i + 2), 16));
-  const a = bytes(palette.low), b = bytes(palette.high);
-  return '#' + a.map((v, i) => Math.round(v + (b[i] - v) * fraction).toString(16).padStart(2, '0')).join('');
+  const position = fraction * (stops.length - 1), lower = Math.min(Math.floor(position), stops.length - 2);
+  const mix = position - lower, a = bytes(stops[lower]), b = bytes(stops[lower + 1]);
+  return '#' + a.map((v, i) => Math.round(v + (b[i] - v) * mix).toString(16).padStart(2, '0')).join('');
 }
 export function pointColor(data, mode, index, range = valueRange(data, mode)) {
   if (mode === 'uniform') return data.routeColor || '#b9ef69';
   if (mode === 'elevation') return rampColor(data.points[index][2], range);
   const speed = speedAt(data, index);
-  return speed.state === 'stopped' ? palette.stopped : rampColor(speed.value, range);
+  return speed.state === 'stopped' ? palette.stopped : rampColor(speed.value, range, speedPalette);
 }
 export function formatPace(seconds) {
   if (!Number.isFinite(seconds) || seconds <= 0) return '未提供';
@@ -83,28 +85,7 @@ export function endpointTitle(kind, name) {
 }
 export function routeEndpoints(data) {
   return [
-    { kind: 'start', index: 0, title: endpointTitle('start', data.startName), color: '#62e3ab', shape: 'circle' },
-    { kind: 'finish', index: data.points.length - 1, title: endpointTitle('finish', data.finishName), color: '#ffd166', shape: 'rect' }
+    { kind: 'start', index: 0, title: endpointTitle('start', data.startName), color: '#22c55e' },
+    { kind: 'finish', index: data.points.length - 1, title: endpointTitle('finish', data.finishName), color: '#ef4444' }
   ];
-}
-// Move only label boxes; every leader starts at the unmodified projected track point.
-export function layoutEndpointLabels(anchors, bounds, obstacles = []) {
-  const overlaps = (a, b) => a.x < b.x + b.w + 6 && a.x + a.w + 6 > b.x && a.y < b.y + b.h + 6 && a.y + a.h + 6 > b.y;
-  const occupied = [...obstacles, ...anchors.map(p => ({ x: p.x - 10, y: p.y - 10, w: 20, h: 20 }))];
-  return anchors.map(p => {
-    const left = p.x - p.w - 20, right = p.x + 20;
-    const side = p.kind === 'start' ? left : right, other = p.kind === 'start' ? right : left;
-    const candidates = [[side, p.y - p.h - 20], [side, p.y + 20], [p.x - p.w / 2, p.y - p.h - 34], [p.x - p.w / 2, p.y + 34], [other, p.y - p.h - 20], [other, p.y + 20]];
-    for (let y = bounds.top; y + p.h <= bounds.bottom; y += p.h + 8) {
-      for (const x of [p.x - p.w / 2, bounds.left, bounds.right - p.w]) candidates.push([x, y]);
-    }
-    if (p.w > bounds.right - bounds.left || p.h > bounds.bottom - bounds.top) return null;
-    for (const [x, y] of candidates) {
-      const box = { x: Math.max(bounds.left, Math.min(bounds.right - p.w, x)), y: Math.max(bounds.top, Math.min(bounds.bottom - p.h, y)), w: p.w, h: p.h };
-      if (occupied.some(rect => overlaps(box, rect))) continue;
-      occupied.push(box);
-      return { ...box, leader: { x1: p.x, y1: p.y, x2: Math.max(box.x, Math.min(box.x + box.w, p.x)), y2: Math.max(box.y, Math.min(box.y + box.h, p.y)) } };
-    }
-    return null;
-  });
 }

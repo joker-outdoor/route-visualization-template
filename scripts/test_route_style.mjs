@@ -1,17 +1,17 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import * as THREE from '../vendor/three.module.js';
-import { palette, speedAt, valueRange, pointColor, formatPace, formatDuration, speedReadout, lengthSample, tubeColorValues, segmentColors, lineColorValues, endpointTitle, routeEndpoints, layoutEndpointLabels } from '../route-style.js';
+import { palette, speedPalette, speedAt, valueRange, pointColor, formatPace, formatDuration, speedReadout, lengthSample, tubeColorValues, segmentColors, lineColorValues, endpointTitle, routeEndpoints } from '../route-style.js';
 const data = { points: [[0, 0, 10], [1, 1, 20], [2, 2, 30], [3, 3, 30]], routeColor: '#f35b98', speedMps: [null, 0, 2, 4], speedState: ['missing', 'stopped', 'moving', 'moving'], speedUnit: 'm/s', speedSource: 'test timestamps' };
-test('uniform/elevation/speed share color endpoints, missing and stop states', () => {
+test('uniform/elevation/speed preserve their palettes, missing and stop states', () => {
   assert.equal(pointColor(data, 'uniform', 2), '#f35b98');
   assert.equal(pointColor(data, 'elevation', 0), palette.low);
   assert.equal(pointColor(data, 'elevation', 3), palette.high);
   assert.deepEqual(valueRange(data, 'speed'), [2, 4]);
   assert.equal(pointColor(data, 'speed', 0), palette.missing);
   assert.equal(pointColor(data, 'speed', 1), palette.stopped);
-  assert.equal(pointColor(data, 'speed', 2), palette.low);
-  assert.equal(pointColor(data, 'speed', 3), palette.high);
+  assert.equal(pointColor(data, 'speed', 2), '#ef4444');
+  assert.equal(pointColor(data, 'speed', 3), '#22c55e');
   assert.match(pointColor({ ...data, points: [[0, 0, 20]] }, 'elevation', 0), /^#[\da-f]{6}$/);
 });
 test('legacy/misaligned/unknown-unit speeds stay missing, zero remains a stop', () => {
@@ -66,8 +66,8 @@ test('a speed spike saturates without compressing the normal running color range
   const route = { ...data, points: speeds.map((_, i) => [i, 0, i]), speedMps: speeds, speedState: speeds.map(() => 'moving') };
   const range = valueRange(route, 'speed');
   assert.deepEqual(range, [2.05, 2.95]);
-  assert.equal(pointColor(route, 'speed', 100, range), palette.high);
-  assert.equal(pointColor(route, 'speed', 0, range), palette.low);
+  assert.equal(pointColor(route, 'speed', 100, range), '#22c55e');
+  assert.equal(pointColor(route, 'speed', 0, range), '#ef4444');
   assert.notEqual(pointColor(route, 'speed', 25, range), pointColor(route, 'speed', 75, range));
   assert.match(speedReadout(route, 100), /^42.6 km\/h/);
   assert.deepEqual(valueRange(route, 'elevation'), [0, 100]);
@@ -86,8 +86,7 @@ test('endpoint identity uses exact first/last indices and configured Chinese nam
   const ends = routeEndpoints(route);
   assert.equal(ends[0].index, 0); assert.equal(ends[1].index, route.points.length - 1);
   assert.equal(ends[0].title, '起点 · 北山街入口'); assert.equal(ends[1].title, '终点 · 回到入口');
-  assert.equal(ends[0].shape, 'circle'); assert.equal(ends[1].shape, 'rect');
-  assert.notEqual(ends[0].color, ends[1].color);
+  assert.equal(ends[0].color, '#22c55e'); assert.equal(ends[1].color, '#ef4444');
   for (const mode of ['uniform', 'elevation', 'speed']) {
     pointColor(route, mode, 0);
     assert.deepEqual(routeEndpoints({ ...route, routeColor: '#ffffff' }), ends);
@@ -95,31 +94,13 @@ test('endpoint identity uses exact first/last indices and configured Chinese nam
   assert.equal(JSON.stringify(route), original);
   assert.equal(endpointTitle('start', '起点'), '起点'); assert.equal(endpointTitle('finish', undefined), '终点');
 });
-test('nearby or coincident endpoint labels stay separate on mobile and leaders retain exact anchors', () => {
-  const bounds = { left: 8, right: 382, top: 100, bottom: 415 };
-  const obstacle = { x: 265, y: 100, w: 113, h: 150 };
-  for (const delta of [0, 2]) {
-    const anchors = [{ kind: 'start', x: 260, y: 120, w: 100, h: 26 }, { kind: 'finish', x: 260 + delta, y: 120 + delta, w: 100, h: 26 }];
-    const original = JSON.stringify(anchors), boxes = layoutEndpointLabels(anchors, bounds, [obstacle]);
-    assert.ok(boxes.every(Boolean));
-    const intersects = (a,b) => a.x < b.x+b.w && a.x+a.w > b.x && a.y < b.y+b.h && a.y+a.h > b.y;
-    assert.equal(intersects(boxes[0], boxes[1]), false);
-    boxes.forEach((box,i) => {
-      assert.equal(intersects(box, obstacle), false);
-      assert.ok(box.x >= bounds.left && box.x+box.w <= bounds.right && box.y >= bounds.top && box.y+box.h <= bounds.bottom);
-      assert.equal(box.leader.x1, anchors[i].x); assert.equal(box.leader.y1, anchors[i].y);
-      assert.ok(box.leader.x2 >= box.x && box.leader.x2 <= box.x+box.w);
-      assert.ok(box.leader.y2 >= box.y && box.leader.y2 <= box.y+box.h);
-    });
-    assert.equal(JSON.stringify(anchors), original);
-  }
-});
-test('edge-of-map endpoints keep bounded labels without moving marker coordinates', () => {
-  const anchors = [{ kind: 'start', x: 10, y: 105, w: 140, h: 26 }, { kind: 'finish', x: 377, y: 410, w: 140, h: 26 }];
-  const bounds = { left: 8, right: 382, top: 100, bottom: 415 };
-  const boxes = layoutEndpointLabels(anchors, bounds);
-  boxes.forEach((box,i) => {
-    assert.ok(box && box.x >= 8 && box.x+box.w <= 382 && box.y >= 100 && box.y+box.h <= 415);
-    assert.deepEqual([box.leader.x1, box.leader.y1], [anchors[i].x, anchors[i].y]);
-  });
+test('speed runs red through yellow to green while elevation retains its original ramp', () => {
+  assert.deepEqual(speedPalette, ['#ef4444', '#facc15', '#22c55e']);
+  const speeds = [1, 2, 3, 4, 5], range = [1, 5];
+  const route = { ...data, points: speeds.map(() => [0, 0, 20]), speedMps: speeds, speedState: speeds.map(() => 'moving') };
+  assert.deepEqual(speeds.map((_, i) => pointColor(route, 'speed', i, range)), ['#ef4444', '#f5882d', '#facc15', '#8ec93a', '#22c55e']);
+  assert.equal(pointColor(route, 'speed', 0, [2, 4]), '#ef4444');
+  assert.equal(pointColor(route, 'speed', 4, [2, 4]), '#22c55e');
+  assert.equal(pointColor(route, 'speed', 2, [3, 3]), '#facc15');
+  assert.equal(pointColor(route, 'elevation', 0, [10, 30]), '#aabea0');
 });

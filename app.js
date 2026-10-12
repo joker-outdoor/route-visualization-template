@@ -1,6 +1,6 @@
 import * as THREE from 'three';
 import { OrbitControls } from './vendor/OrbitControls.js';
-import { palette, speedAt, valueRange, pointColor, formatPace, formatDuration, speedReadout, lengthSample, tubeColorValues, segmentColors, lineColorValues, endpointTitle, routeEndpoints, layoutEndpointLabels } from './route-style.js';
+import { palette, speedPalette, speedAt, valueRange, pointColor, formatPace, formatDuration, speedReadout, lengthSample, tubeColorValues, segmentColors, lineColorValues, endpointTitle, routeEndpoints } from './route-style.js';
 
 const $ = id => document.getElementById(id);
 let color = '#b9ef69', colorMode = 'uniform', pointColors = [], recolorRoute = () => {};
@@ -84,47 +84,22 @@ $('close-card').onclick = () => { $('point-card').hidden = true; };
 
 function createEndpointMarkers() {
   if (endpointMarkers[0]?.el.isConnected) return;
-  const ns = 'http://www.w3.org/2000/svg';
-  const svg = document.createElementNS(ns, 'svg'); svg.classList.add('endpoint-overlay'); svg.setAttribute('aria-hidden', 'true'); $('labels').append(svg);
   endpointMarkers = routeEndpoints(D).map(item => {
-    const group = document.createElementNS(ns, 'g'), leader = document.createElementNS(ns, 'line'), pin = document.createElementNS(ns, item.shape);
-    group.setAttribute('stroke', item.color); group.setAttribute('stroke-width', '2');
-    pin.setAttribute('fill', '#0a1218');
-    if (item.shape === 'circle') pin.setAttribute('r', '7');
-    else { pin.setAttribute('width', '8'); pin.setAttribute('height', '8'); }
-    group.append(leader, pin); svg.append(group);
-    const el = document.createElement('button'); el.className = `map-label endpoint endpoint-${item.kind}`;
+    const el = document.createElement('button'); el.className = `endpoint-marker endpoint-${item.kind}`;
     el.style.setProperty('--endpoint-color', item.color); el.title = item.title; el.setAttribute('aria-label', item.title);
-    const badge = document.createElement('b'); badge.textContent = item.kind === 'start' ? '起' : '终';
-    const text = document.createElement('span'); text.textContent = item.title; el.append(badge, text);
     el.onclick = () => { select(item.index, null, true); focus(points[item.index]); };
     $('labels').append(el);
-    return { ...item, el, group, leader, pin };
+    return { ...item, el };
   });
 }
 function renderEndpointMarkers(projected) {
-  const mobile = innerWidth < 760;
-  const bounds = { left: 8, right: innerWidth - 8, top: document.querySelector('header').getBoundingClientRect().bottom + 8,
-    bottom: Math.min($('profile').getBoundingClientRect().top, mobile ? $('side').getBoundingClientRect().top : innerHeight) - 8 };
-  const obstacles = ['side', 'tools', 'point-card'].map(id => $(id).getBoundingClientRect()).filter(r => r.width && r.height).map(r => ({ x: r.left, y: r.top, w: r.width, h: r.height }));
-  const visible = [];
+  const [start, finish] = projected;
+  const close = Math.hypot(start.x - finish.x, start.y - finish.y) < 16;
   endpointMarkers.forEach((item, i) => {
-    const p = projected[i], onScreen = p.visible !== false && p.x >= 0 && p.x <= innerWidth && p.y >= 0 && p.y <= innerHeight;
-    item.el.hidden = !onScreen; item.group.style.display = onScreen ? '' : 'none';
-    if (!onScreen) return;
-    visible.push({ ...p, kind: item.kind, w: item.el.offsetWidth, h: item.el.offsetHeight, item });
+    const p = projected[i];
+    item.el.hidden = p.visible === false || p.x < 0 || p.x > innerWidth || p.y < 0 || p.y > innerHeight;
+    item.el.style.transform = `translate(${p.x + (close ? (i === 0 ? -8 : 8) : 0)}px,${p.y}px) translate(-50%,-50%)`;
   });
-  const boxes = layoutEndpointLabels(visible, bounds, obstacles);
-  visible.forEach((p, i) => {
-    const { item } = p, box = boxes[i];
-    if (item.shape === 'circle') { item.pin.setAttribute('cx', p.x); item.pin.setAttribute('cy', p.y); }
-    else { item.pin.setAttribute('x', p.x - 4); item.pin.setAttribute('y', p.y - 4); }
-    item.el.hidden = !box; item.leader.style.display = box ? '' : 'none';
-    if (!box) return;
-    item.el.style.transform = `translate(${box.x}px,${box.y}px)`;
-    for (const [key, value] of Object.entries(box.leader)) item.leader.setAttribute(key, value);
-  });
-  return boxes.filter(Boolean).map(b => ({ x: b.x + b.w / 2, y: b.y + b.h, w: b.w, h: b.h }));
 }
 function strokeRoute(context, xy, width) {
   context.lineWidth = width;
@@ -151,7 +126,7 @@ function setColorMode(mode) {
   const uniform = mode === 'uniform', speed = mode === 'speed';
   $('legend-low').textContent = uniform ? '路线颜色' : speed ? `≤ ${(range[0]*3.6).toFixed(1)} km/h` : `${Math.round(range[0])} m`;
   $('legend-high').textContent = uniform ? '' : speed ? `≥ ${(range[1]*3.6).toFixed(1)} km/h` : `${Math.round(range[1])} m`;
-  $('legend-ramp').style.background = uniform ? color : `linear-gradient(90deg,${palette.low},${palette.high})`;
+  $('legend-ramp').style.background = uniform ? color : `linear-gradient(90deg,${(speed ? speedPalette : [palette.low, palette.high]).join(',')})`;
   $('legend-states').hidden = !speed;
   $('speed-note').hidden = !speed && !document.querySelector('[data-color="speed"]').disabled;
   $('speed-note').textContent = speed ? '推算速度 · 色阶取中间90%的速度范围；少量或常量时取实际范围' : '此路线未提供逐点速度';
@@ -311,10 +286,11 @@ async function init3D() {
     }
     if (selection !== null) { marker.visible = true; marker.position.copy(routePosition(points[selection])); } else marker.visible = false;
     controls.update(); renderer.render(scene, camera);
-    const placed = renderEndpointMarkers(endpointMarkers.map(item => {
+    renderEndpointMarkers(endpointMarkers.map(item => {
       const p = routePosition(points[item.index]).applyMatrix4(world.matrixWorld).project(camera);
       return { x: (p.x + 1) * innerWidth / 2, y: (1 - p.y) * innerHeight / 2, visible: p.z >= -1 && p.z <= 1 };
     }));
+    const placed = [];
     for (const item of markerLabels) {
       v.copy(item.top).applyMatrix4(world.matrixWorld).project(camera);
       if (v.z < -1 || v.z > 1 || Math.abs(v.x) > 1.2 || Math.abs(v.y) > 1.2) { item.el.hidden = true; continue; }
