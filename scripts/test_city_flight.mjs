@@ -43,7 +43,7 @@ test('concave roof area, outward normals and suspended bottom stay correct in on
 
 // Exercise the actual app handlers, geometry and camera with a CPU renderer/DOM stub.
 // This verifies scene state, not WebGL output, browser layout or visual acceptance.
-export async function sceneFixture({buildingsFile='buildings.json',badFetch=false,viewport=[1200,900],towerAhead=0,towerSide=0,flat=false,routeData,terrainData,cityData}={}) {
+export async function sceneFixture({buildingsFile='buildings.json',badFetch=false,viewport=[1200,900],towerAhead=0,towerSide=0,flat=false,routeData,terrainData,cityData,detailManifest,imageryDetailFile}={}) {
   const elements=new Map();
   let [width,height]=viewport;
   const events=new Map();
@@ -73,6 +73,8 @@ export async function sceneFixture({buildingsFile='buildings.json',badFetch=fals
   const route=structuredClone(routeData||JSON.parse(await readFile(new URL('../data/route.json',import.meta.url),'utf8')));
   // Use the local demo track, moving a footprint onto its middle for independent-height checks.
   if(buildingsFile!==null)route.buildingsFile=buildingsFile;
+  if(imageryDetailFile!==undefined)route.imageryDetailFile=imageryDetailFile;
+  else if(detailManifest!==undefined)route.imageryDetailFile='imagery-detail.json';
   const mid=route.points.at(-1)[3]/2,p=functions.trackSample(route.points,mid),size=.0001;
   const a=functions.trackSample(route.points,mid-.05),b=functions.trackSample(route.points,mid+.05);
   const direction=new THREE.Vector2((b[4]-a[4])*route.widthKm,(b[5]-a[5])*route.heightKm).normalize();
@@ -84,11 +86,11 @@ export async function sceneFixture({buildingsFile='buildings.json',badFetch=fals
     buildings:[footprint({ring:[[lon,lat],[lon+size,lat],[lon+size,lat+size],[lon,lat+size]],heightM:339,minHeightM:200})]};
   const terrain=structuredClone(terrainData||JSON.parse(await readFile(new URL('../data/terrain.json',import.meta.url),'utf8')));
   if(flat)terrain.elevations.fill(500);
-  const context=vm.createContext({...style,THREE:{...THREE,WebGLRenderer:Renderer,TextureLoader:class{async loadAsync(){return new THREE.Texture();}}},OrbitControls:Controls,
+  const context=vm.createContext({...style,THREE:{...THREE,WebGLRenderer:Renderer,TextureLoader:class{async loadAsync(){return new THREE.Texture({width:1024,height:1024});}}},OrbitControls:Controls,
     document:{getElementById:element,createElement:()=>element(Symbol()),createTextNode:text=>({textContent:text}),querySelector:element,querySelectorAll:()=>[]},matchMedia:()=>({matches:false}),
     innerWidth:width,innerHeight:height,devicePixelRatio:1,performance:{now:()=>0},addEventListener(name,fn){events.set(name,fn);},console:{...console,warn(){}},URL,encodeURIComponent,
     Image:class{constructor(){this.width=1200;this.height=1200;}async decode(){}},
-    AbortSignal,location:{href:'http://localhost/'},fetch:async()=>{fetches++;if(badFetch)throw new Error('fixture failure');return {ok:true,json:async()=>buildings};}});
+    AbortSignal,location:{href:'http://localhost/'},fetch:async url=>{fetches++;if(badFetch)throw new Error('fixture failure');return {ok:true,json:async()=>url==='data/imagery-detail.json'?detailManifest:buildings};}});
   const body=source.replace(/^import .*;\n/gm,'').slice(0,source.replace(/^import .*;\n/gm,'').lastIndexOf('\nmain().catch'));
   vm.runInContext(body,context);
   context.route=route;context.terrain=terrain;

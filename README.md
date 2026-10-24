@@ -21,6 +21,12 @@ python3 -m http.server 8080 --bind 127.0.0.1
 
 生成阶段需要网络，缓存置于系统临时目录 `joker-outdoor-tile-cache`。底图默认 Esri World Imagery zoom 14，DEM 为 Terrarium zoom 12；大路线可在配置中降低 `imageryZoom` / `demZoom`。每种底图最多 128 个瓦片，超限时明确报错。
 
+城市近景可在自己的路线配置中增加 `"detailImageryZoom": 17`（只接受整数 15–18，布尔值非法）。默认示例不配置它，旧路线的输出和加载方式保持不变；`--demo` 不提供真实高清影像，需要省略此选项。全景仍使用最长边 1200px 的 `satellite.jpg`，高清来自同一 Esri 缓存中的原生瓦片，而非将全景插值放大。成都纬度 z17 约为 1.03 m/px；4×4 个 256px 瓦片组成 1024px 块，地图边缘按实际范围裁切。
+
+生成器沿每段轨迹按不超过 250m 采样，覆盖约 600m 缓冲（选区多留半个采样间距），不会遗漏只有两个端点的长直线。下载前检查总计最多 256 块、4096 个源瓦片；超过限制需降低 `detailImageryZoom` 或缩短路线。新增 `data/imagery-detail/`、`imagery-detail.json`，成功后才在 `route.json` 写入 `imageryDetailFile`。manifest 为 `{version:1, zoom, source, patches:[{file,bounds}]}`；文件相对 `data/`，`bounds=[u0,v0,u1,v1]` 是地图 Mercator 归一化范围，图片北向上。全部下载、生成和校验完成后才替换输出，安装失败恢复旧数据；DEM、原轨迹点和统计口径保持原样。
+
+浏览器只读本地文件，在 3D 近景按视线地表目标及前瞻方向加载；远景与 2D 使用全景底图。桌面和手机均限制最多 12 个局部纹理/mesh、4 个并发加载，约每 250ms 更新选区；1024px 纹理含 mipmap 的 GPU 预算约 64 MiB（另有底图、浏览器解码及网格开销），不拼成整幅大纹理。淘汰时释放纹理与材质，共享地形网格保留。纹理按钮同时控制局部块；无 manifest 不额外请求，坏 manifest、越界路径或局部加载失败都保留全景底图，不阻断飞行。`check_data.py` 会校验可选 manifest、路径、范围及可解码的图片尺寸。近景约指相机距目标不超过 2.5km、距目标地表高度不超过 1.5km。
+
 ## 配置与数据口径
 
 - 必填 `title` 和 `madeOn`（页面日期）；`recordedOn` 是原轨迹日期，可置空，不能把页面日期或文件名当活动日期。
@@ -81,6 +87,8 @@ python3 scripts/check_data.py
 `--demo` 只生成明确标注的合成地形与底图，用于离线开发和测试；真实行程生成时省略此参数。浏览器检查桌面、手机、地标点击、剖面联动与 `?view=2d`。GitHub Actions 验证数据和脚本；合入后启用 GitHub Pages：main 分支，根目录 `/`。发布后再次检查在线页面。
 
 现有测试入口同时加载 `test_city_flight.mjs`，使用实际 Three.js 几何和 CPU 场景替身检查凹轮廓法线、悬空部件、独立高度、相机移动、暂停、进度、倍速、重播、开关与加载失败。它不验证 WebGL 画面、手机布局或视觉效果；发布前另在真实 Edge 验看城市近景、电视塔部件与窄屏控件。
+
+同一入口还运行 `test_detail_imagery.mjs`，检查分块请求/驻留上限、节流、裁切平面、南北 UV、淘汰、迟到、开关和失败回退。Python 回归以模拟影像检查长直线选区、边缘原生裁切、下载/替换失败保护及 manifest 校验；这些离线 fixture 不代表真实 Esri 影像的视觉验收。城市项目同步后仍需在真实 Edge 核对金沙、电视塔、环球中心近景，以及拖动、飞行和手机效果。
 
 ## 来源
 
