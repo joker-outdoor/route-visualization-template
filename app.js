@@ -156,6 +156,54 @@ function cityGeometry(rows, project) {
   return { geometry, grounds: new Float32Array(grounds), offsets: new Float32Array(offsets), roofs, skipped };
 }
 
+function kilometerConfig(data = D) {
+  const config = data?.kilometerMarkers, total = data?.points?.at(-1)?.[3];
+  return config && Number.isFinite(config.distanceKm) && config.distanceKm > 0 && Math.floor(config.distanceKm) <= 1000
+    && typeof config.positionSource === 'string' && config.positionSource.trim() && Number.isFinite(total) && total > 0 ? config : null;
+}
+function displayKm(km) {
+  const config = kilometerConfig();
+  return config ? km / points.at(-1)[3] * config.distanceKm : km;
+}
+function distanceText(km, digits = 2) {
+  return displayKm(km).toFixed(kilometerConfig() && Math.abs(km - points.at(-1)[3]) < 1e-8 ? 3 : digits);
+}
+function kilometerDefinitions(data = D) {
+  const config = kilometerConfig(data);
+  return config ? Array.from({length: Math.floor(config.distanceKm)}, (_, i) => {
+    const km = i + 1, geometryKm = km * data.points.at(-1)[3] / config.distanceKm;
+    return {km, geometryKm, p: trackSample(data.points, geometryKm), cls: 'kilometer'};
+  }) : [];
+}
+function kilometerElement(item) {
+  const el = document.createElement('span'); el.className = 'map-label kilometer';
+  el.setAttribute('data-km', String(item.km)); el.setAttribute('data-geometry-km', item.geometryKm.toFixed(12));
+  el.setAttribute('role', 'img'); el.setAttribute('aria-label', `${item.km} 公里，${kilometerConfig().positionSource}`);
+  el.textContent = `${item.km} km`; $('labels').append(el); return el;
+}
+// Keep each anchor on the route; hide crowded labels rather than moving their location.
+function placeKilometers(items, project, close = false) {
+  if (!items.length) return [];
+  const current = displayKm(flightPoint?.[3] ?? (selection === null ? 0 : points[selection][3]));
+  const nearby = item => item.km >= Math.floor(current) && item.km <= Math.floor(current) + 2;
+  const priority = item => item.km === Math.floor(current) ? -1 : Math.abs(item.km - current) + (item.km < current ? 2 : 0);
+  const ordered = [...items].sort((a, b) => Number(nearby(b)) - Number(nearby(a)) || priority(a) - priority(b));
+  const blocked = ['side', 'tools', 'profile', 'point-card'].filter(id => !$(id).hidden).map(id => $(id).getBoundingClientRect());
+  blocked.push(document.querySelector('header').getBoundingClientRect());
+  const placed = [], stride = Math.max(1, Math.ceil(items.length / (innerWidth < 760 ? 8 : 16)));
+  for (const item of ordered) {
+    const p = project(item), w = item.el.offsetWidth || 44, h = item.el.offsetHeight || 22;
+    const box = {left: p.x-w/2-4, right: p.x+w/2+4, top: p.y-h-12, bottom: p.y+3};
+    const overlaps = b => box.left < b.right && box.right > b.left && box.top < b.bottom && box.bottom > b.top;
+    const dense = close ? (flightPoint !== null || selection !== null) && !nearby(item) : !nearby(item) && item.km % stride !== 0;
+    item.el.hidden = dense || p.visible === false || box.left < 4 || box.right > innerWidth-4 || box.top < 4 || box.bottom > innerHeight-4
+      || blocked.some(overlaps) || placed.some(overlaps);
+    if (!item.el.hidden) placed.push(box);
+    item.el.style.transform = `translate(${p.x}px,${p.y}px) translate(-50%,calc(-100% - 9px))`;
+  }
+  return placed;
+}
+
 function nearest(km) {
   let lo = 0, hi = points.length - 1;
   while (lo < hi) { const mid = (lo + hi) >> 1; if (points[mid][3] < km) lo = mid + 1; else hi = mid; }
@@ -168,10 +216,10 @@ function select(index, landmark = null, showCard = false) {
   markerLabels.forEach(m => m.el.classList.toggle('active', m.landmark === landmark && landmark !== null));
   if (index !== null) {
     const p = points[index];
-    $('readout').textContent = `${p[3].toFixed(2)} km · ${Math.round(p[2])} m · ${speedReadout(D, index)}${landmark !== null ? ' · ' + D.landmarks[landmark].name : ''}`;
+    $('readout').textContent = `${distanceText(p[3])} km · ${Math.round(p[2])} m · ${speedReadout(D, index)}${landmark !== null ? ' · ' + D.landmarks[landmark].name : ''}`;
     if (showCard) {
       $('point-name').textContent = landmark !== null ? D.landmarks[landmark].name : index === 0 ? endpointTitle('start', D.startName) : index === points.length - 1 ? endpointTitle('finish', D.finishName) : '轨迹最高点';
-      $('point-detail').textContent = `${p[3].toFixed(2)} km / 海拔 ${Math.round(p[2])} m · ${speedReadout(D, index)}${landmark !== null ? ' · ' + D.landmarks[landmark].positionSource : ''}`;
+      $('point-detail').textContent = `${distanceText(p[3])} km / 海拔 ${Math.round(p[2])} m · ${speedReadout(D, index)}${landmark !== null ? ' · ' + D.landmarks[landmark].positionSource : ''}`;
       $('point-card').hidden = false;
     }
   } else $('readout').textContent = '滑过剖面，查看地图位置';
@@ -195,8 +243,9 @@ function drawProfile() {
   }
   ctx.textAlign = 'center'; ctx.fillStyle = '#8da7b0';
   const step = g.w < 600 ? 4 : 2;
-  for (let km = 0; km < D.stats.distanceKm; km += step) ctx.fillText(`${km}`, X(km), g.h - 3);
-  ctx.textAlign = 'right'; ctx.fillText(`${D.stats.distanceKm.toFixed(1)} km`, X(D.stats.distanceKm), g.h - 3);
+  const profileTotal = displayKm(D.stats.distanceKm);
+  for (let km = 0; km < profileTotal - (kilometerConfig() ? step * .5 : 0); km += step) ctx.fillText(`${km}`, X(km / profileTotal * D.stats.distanceKm), g.h - 3);
+  ctx.textAlign = 'right'; ctx.fillText(`${kilometerConfig() ? kilometerConfig().distanceKm.toFixed(3) : D.stats.distanceKm.toFixed(1)} km`, X(D.stats.distanceKm), g.h - 3);
   ctx.beginPath(); points.forEach((p, i) => i ? ctx.lineTo(X(p[3]), Y(p[2])) : ctx.moveTo(X(p[3]), Y(p[2])));
   ctx.lineTo(X(D.stats.distanceKm), Y(e0)); ctx.lineTo(X(0), Y(e0)); ctx.closePath();
   const gradient = ctx.createLinearGradient(0, g.t, 0, g.h - g.b); gradient.addColorStop(0, `${color}3d`); gradient.addColorStop(1, `${color}02`);
@@ -308,6 +357,8 @@ function fillDetails() {
   $('landmark-title').textContent = D.landmarkTitle;
   $('landmark-note').textContent = D.landmarkNote;
   $('data-note').textContent = `路线几何长度 ${D.stats.distanceKm.toFixed(2)} km，按坐标测算；运动统计：${D.statsSource}。运动计时：${D.movingTimeSource || '未提供可靠暂停统计'}。${D.stats.avgPaceSecondsKm > 0 ? '平均配速按运动时间和上述配速里程计算。' : '暂停统计不足，未计算运动配速。'}逐点速度：${D.speedSource || '未提供'}。剖面保留轨迹海拔，3D 路线贴合 DEM。`;
+  if (kilometerConfig()) $('data-note').textContent += `公里标记按官方全程${kilometerConfig().distanceKm} km与轨迹几何长度等比例定位。${kilometerConfig().positionSource}。`;
+  else if (D.kilometerMarkers !== undefined) $('data-note').textContent += '公里标记配置不可用，里程按轨迹几何长度显示。';
   $('record-date').textContent = 'WGS84';
   $('download').download = `${D.title}.gpx`;
   $('imagery-credit').textContent = D.imageryCredit;
@@ -320,7 +371,7 @@ function fillDetails() {
     const li = document.createElement('li'), b = document.createElement('button');
     const n = document.createElement('b'); n.textContent = String(i + 1);
     const name = document.createElement('span'); name.className = 'name'; name.textContent = landmark.name;
-    const km = document.createElement('span'); km.className = 'km'; km.textContent = `${points[landmark.index][3].toFixed(1)} km`;
+    const km = document.createElement('span'); km.className = 'km'; km.textContent = `${distanceText(points[landmark.index][3], 1)} km`;
     b.append(n, name, km); b.onclick = () => { select(landmark.index, i, true); focus(points[landmark.index]); }; li.append(b); $('landmark-list').append(li);
   });
 }
@@ -478,9 +529,26 @@ async function init3D() {
     el.onclick = () => { select(item.index, item.landmark ?? null, true); focus(item.p); };
     $('labels').append(el); markerLabels.push({ ...item, el, top });
   }
+  const kilometerLabels = kilometerDefinitions().map(item => ({...item, el: kilometerElement(item), top: xyz(item.p[4], item.p[5])}));
   createEndpointMarkers();
   let transition = null, viewPreset = 'overview', narrow = innerWidth < 760;
   let playing = false, flightView = false, flightKm = 0, lastFrame = null, lastProfile = 0;
+  const fittingCamera = camera.clone();
+  let heading = null, headingSpeed = 0, turnSign = 1, lookSpeed = 0, travelScale = 1;
+  let followCenter = null, followBack = 0, followRise = 0;
+  const turnRate = THREE.MathUtils.degToRad(18), turnAcceleration = THREE.MathUtils.degToRad(12);
+  const angleDelta = (to, from) => {
+    let delta = Math.atan2(Math.sin(to - from), Math.cos(to - from));
+    if (Math.abs(Math.abs(delta) - Math.PI) < 1e-5) delta = turnSign * Math.PI;
+    return delta;
+  };
+  function trackHeading(km) {
+    const a = routePosition(trackSample(points, km - .05)), b = routePosition(trackSample(points, km + .05));
+    return Math.hypot(b.x-a.x, b.z-a.z) < 1e-6 ? heading : Math.atan2(b.x-a.x, b.z-a.z);
+  }
+  function approachSpeed(speed, desired, dt) {
+    return speed + THREE.MathUtils.clamp(desired-speed, -turnAcceleration*dt, turnAcceleration*dt);
+  }
   let flightRect, framingRoof = null, framingKm = -Infinity, framingScale = '';
   const totalKm = points.at(-1)[3];
   pauseFlight = () => {
@@ -524,19 +592,33 @@ async function init3D() {
   }
   function flightReadout() {
     $('flight-progress').value = String(Math.round(flightKm / totalKm * 1000));
-    $('flight-distance').textContent = `${flightKm.toFixed(2)} / ${totalKm.toFixed(2)} km`;
+    $('flight-distance').textContent = `${distanceText(flightKm)} / ${distanceText(totalKm)} km`;
     if (flightPoint) {
-      $('readout').textContent = `${flightKm.toFixed(2)} km · ${Math.round(flightPoint[2])} m · ${speedReadout(D, selection)}`;
+      $('readout').textContent = `${distanceText(flightKm)} km · ${Math.round(flightPoint[2])} m · ${speedReadout(D, selection)}`;
       drawProfile();
     }
   }
   function flightCamera(snap, dt) {
     flightPoint = trackSample(points, flightKm); selection = nearest(flightKm);
     const current = routePosition(flightPoint); current.y *= world.scale.y;
-    const behind = routePosition(trackSample(points, flightKm - .05));
-    const ahead = routePosition(trackSample(points, flightKm + .05));
-    const direction = ahead.sub(behind); direction.y = 0;
-    if (direction.lengthSq() < 1e-12) direction.set(0, 0, -1); else direction.normalize();
+    if (!snap && dt === 0) {
+      // Resume from the displayed position too, including after a manual orbit.
+      heading = Math.atan2(current.x-camera.position.x, current.z-camera.position.z);
+      headingSpeed = 0; lookSpeed = 0; followCenter = current.clone();
+      followBack = Math.hypot(current.x-camera.position.x, current.z-camera.position.z);
+      followRise = camera.position.y-current.y;
+    }
+    const requestedHeading = trackHeading(flightKm);
+    if (snap || heading === null) {
+      heading = requestedHeading ?? 0; headingSpeed = 0; lookSpeed = 0; travelScale = 1;
+    } else {
+      const error = angleDelta(requestedHeading ?? heading, heading);
+      if (Math.abs(error) > 1e-5) turnSign = Math.sign(error);
+      headingSpeed = approachSpeed(headingSpeed, THREE.MathUtils.clamp(error * 1.4, -turnRate, turnRate), dt);
+      const step = headingSpeed * dt;
+      if (Math.abs(step) > Math.abs(error)) { heading += error; headingSpeed = 0; } else heading += step;
+    }
+    const direction = new THREE.Vector3(Math.sin(heading), 0, Math.cos(heading));
     const target = routePosition(trackSample(points, flightKm + .20)); target.y *= world.scale.y; target.y += .025;
     const roof = skyline(current, direction), features = [current.clone(), target.clone()];
     let rise = .24;
@@ -549,28 +631,46 @@ async function init3D() {
       for (const x of [roof.minX, roof.maxX]) for (const z of [roof.minZ, roof.maxZ]) for (const y of [floor, top]) features.push(new THREE.Vector3(x, y, z));
     }
     const from = camera.position.clone(), desired = new THREE.Vector3();
+    fittingCamera.copy(camera);
     let back = innerWidth < 760 ? .40 : .32;
     for (let attempt = 0; attempt < 14; attempt++) {
       desired.copy(current).addScaledVector(direction, -back); desired.y += rise;
       desired.y = Math.max(desired.y, clearance(desired, current));
-      camera.position.copy(desired); camera.lookAt(target); camera.updateMatrixWorld(true);
+      fittingCamera.position.copy(desired); fittingCamera.lookAt(target); fittingCamera.updateMatrixWorld(true);
       const fits = features.every(point => {
-        const p = point.clone().project(camera), x = (p.x + 1) * innerWidth / 2, y = (1 - p.y) * innerHeight / 2;
+        const p = point.clone().project(fittingCamera), x = (p.x + 1) * innerWidth / 2, y = (1 - p.y) * innerHeight / 2;
         const mx = (flightRect.right - flightRect.left) * .08, my = (flightRect.bottom - flightRect.top) * .08;
         return p.z > -1 && p.z < 1 && x >= flightRect.left + mx && x <= flightRect.right - mx && y >= flightRect.top + my && y <= flightRect.bottom - my;
       });
       if (fits || back >= 2.5) break;
       back = Math.min(2.5, back * 1.2);
     }
-    // Check the actual smoothed movement too, rather than only the destination.
-    const next = snap ? desired : from.clone().lerp(desired, 1 - Math.exp(-dt * 5));
-    next.y = Math.max(next.y, clearance(snap ? next : from, next));
-    camera.position.copy(next);
-    if (snap) controls.target.copy(target); else controls.target.lerp(target, 1 - Math.exp(-dt * 5));
-    // Remain inside normal OrbitControls angles, so pausing does not alter the pose.
-    camera.position.y = Math.max(camera.position.y, controls.target.y + Math.hypot(next.x - controls.target.x, next.z - controls.target.z) * .08);
-    camera.lookAt(controls.target);
+    const blend = snap ? 1 : 1 - Math.exp(-dt * 5);
+    if (snap || !followCenter) { followCenter = current.clone(); followBack = back; followRise = desired.y-current.y; }
+    else {
+      followCenter.lerp(current, blend); followBack += (back-followBack)*blend;
+      followRise += (desired.y-current.y-followRise)*blend;
+    }
+    // Orbit the follower using a continuous heading; never cut across a hairpin's center.
+    const next = followCenter.clone().addScaledVector(direction, -followBack); next.y += followRise;
+    next.y = Math.max(next.y, clearance(snap ? next : from, next)); camera.position.copy(next);
+    const wanted = target.clone().sub(next), distance = Math.max(.04, wanted.length()); wanted.normalize();
+    const pitchLimit = Math.PI/2 - controls.maxPolarAngle;
+    const wantedPitch = Math.min(-pitchLimit, Math.asin(THREE.MathUtils.clamp(wanted.y, -1, 1)));
+    let yaw = Math.atan2(wanted.x, wanted.z), pitch = wantedPitch;
+    if (!snap) {
+      const forward = new THREE.Vector3(0, 0, -1).applyQuaternion(camera.quaternion);
+      const oldYaw = Math.atan2(forward.x, forward.z), oldPitch = Math.asin(THREE.MathUtils.clamp(forward.y, -1, 1));
+      const dy = angleDelta(yaw, oldYaw), dp = pitch - oldPitch, arc = Math.hypot(dy, dp);
+      lookSpeed = approachSpeed(lookSpeed, Math.min(turnRate, arc * 1.6), dt);
+      // A yaw/pitch path's quaternion arc is <= hypot(dyaw, dpitch); this caps the actual rendered pose.
+      const fraction = arc > 1e-10 ? Math.min(1, lookSpeed * dt / arc) : 1;
+      yaw = oldYaw + dy * fraction; pitch = oldPitch + dp * fraction;
+    }
+    const view = new THREE.Vector3(Math.sin(yaw)*Math.cos(pitch), Math.sin(pitch), Math.cos(yaw)*Math.cos(pitch));
+    controls.target.copy(next).addScaledVector(view, distance); camera.lookAt(controls.target);
   }
+
   function beginFlightView() {
     transition = null; controls.autoRotate = false; controls.enableDamping = false;
     flightView = true; projection();
@@ -588,7 +688,7 @@ async function init3D() {
     const first = !flightView || !flightPoint || restart;
     beginFlightView(); playing = true; lastFrame = null;
     $('flight-play').textContent = '暂停飞行'; $('flight-play').setAttribute('aria-pressed', 'true');
-    flightCamera(first || reducedMotion, 0); flightReadout();
+    flightCamera(first, 0); flightReadout();
   };
   $('flight-progress').oninput = () => {
     pauseFlight(); beginFlightView(); flightKm = Number($('flight-progress').value) / 1000 * totalKm;
@@ -634,7 +734,11 @@ async function init3D() {
   renderer.setAnimationLoop(now => {
     const dt = lastFrame === null ? 0 : Math.min(.1, (now - lastFrame) / 1000); lastFrame = now;
     if (playing) {
-      flightKm = Math.min(totalKm, flightKm + totalKm / 180 * Number($('flight-speed').value) * dt);
+      const error = heading === null ? 0 : Math.max(Math.abs(angleDelta(trackHeading(flightKm) ?? heading, heading)),
+        Math.abs(angleDelta(trackHeading(Math.min(totalKm, flightKm + .20)) ?? heading, heading)));
+      const desiredScale = error > Math.PI/6 ? .5 : 1;
+      travelScale += (desiredScale-travelScale) * (1-Math.exp(-dt*2));
+      flightKm = Math.min(totalKm, flightKm + totalKm / 180 * Number($('flight-speed').value) * travelScale * dt);
       flightCamera(false, dt);
       if (now - lastProfile > 100 || flightKm === totalKm) { flightReadout(); lastProfile = now; }
       if (flightKm === totalKm) pauseFlight();
@@ -661,7 +765,10 @@ async function init3D() {
       const p = routePosition(points[item.index]).applyMatrix4(world.matrixWorld).project(camera);
       return { x: (p.x + 1) * innerWidth / 2, y: (1 - p.y) * innerHeight / 2, visible: p.z >= -1 && p.z <= 1 };
     }));
-    const placed = [];
+    const placed = placeKilometers(kilometerLabels, item => {
+      const p = item.top.clone().applyMatrix4(world.matrixWorld).project(camera);
+      return {x:(p.x+1)*innerWidth/2, y:(1-p.y)*innerHeight/2, visible:p.z >= -1 && p.z <= 1};
+    }, flightView || camera.position.distanceTo(controls.target) < 2.5).map(b => ({x:(b.left+b.right)/2, y:(b.top+b.bottom)/2, w:b.right-b.left, h:b.bottom-b.top}));
     for (const item of markerLabels) {
       v.copy(item.top).applyMatrix4(world.matrixWorld).project(camera);
       if (v.z < -1 || v.z > 1 || Math.abs(v.x) > 1.2 || Math.abs(v.y) > 1.2) { item.el.hidden = true; continue; }
@@ -692,6 +799,9 @@ async function flatFallback() {
   const c = canvas.getContext('2d'), img = new Image(); img.src = 'data/satellite.jpg'; await img.decode();
   $('tools').hidden = true; recolorRoute = () => {}; focus = () => {};
   createEndpointMarkers();
+  // Clear 3D roots before creating the fallback signs.
+  document.querySelectorAll('.kilometer').forEach(el => el.remove());
+  const kilometerLabels = kilometerDefinitions().map(item => ({...item, el: kilometerElement(item)}));
   document.querySelector('.profile-foot span:first-child').textContent = '卫星俯视图 · 用剖面或地标列表定位';
   renderMap = () => {
     const dpr = Math.min(devicePixelRatio, 2); canvas.width = innerWidth * dpr; canvas.height = innerHeight * dpr; c.setTransform(dpr, 0, 0, dpr, 0, 0);
@@ -702,6 +812,7 @@ async function flatFallback() {
     const w = img.width * scale, h = img.height * scale, x0 = innerWidth < 760 ? (innerWidth - w) / 2 : 310 + (innerWidth - 310 - w) / 2, y0 = mobile ? 100 : 10;
     c.drawImage(img, x0, y0, w, h); strokeRoute(c, p => [x0 + p[4] * w, y0 + p[5] * h], 2);
     D.landmarks.forEach((landmark, i) => { const p = points[landmark.index], x = x0 + p[4] * w, y = y0 + p[5] * h; c.fillStyle = '#6ee1db'; c.beginPath(); c.arc(x, y, 4, 0, 7); c.fill(); c.font = '11px system-ui'; c.fillText(`${i + 1} ${landmark.name.split('（')[0]}`, x + 7, y); });
+    placeKilometers(kilometerLabels, item => ({x:x0+item.p[4]*w, y:y0+item.p[5]*h}));
     if (selection !== null) { const p = points[selection]; c.fillStyle = '#fff'; c.beginPath(); c.arc(x0 + p[4] * w, y0 + p[5] * h, 5, 0, 7); c.fill(); }
     renderEndpointMarkers(endpointMarkers.map(item => ({ x: x0 + points[item.index][4] * w, y: y0 + points[item.index][5] * h })));
   };
