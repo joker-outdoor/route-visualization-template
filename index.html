@@ -25,10 +25,19 @@
 <div class="divider"></div><h2 id="landmark-title">沿途地标</h2>
 <ol id="landmark-list"></ol>
 <p id="landmark-note" class="detail"></p>
-<details><summary>轨迹与数据说明</summary><p id="data-note"></p></details>
+<details><summary>轨迹与数据说明</summary><p id="data-note"></p><p id="building-note" hidden></p></details>
 <a id="download" class="download" href="data/route.gpx" download>↓ 下载路线 GPX</a>
 </aside>
-<nav id="tools" aria-label="地图控制"><div class="tool-row panel"><button id="overview" aria-pressed="true">全景</button><button id="top" aria-pressed="false">俯视</button><button id="rotate" aria-pressed="false">旋转</button></div><div class="tool-row panel"><label for="exag">高度夸张 <input id="exag" type="range" min="1" max="5" step="0.5" value="3"></label><output id="exag-value">3×</output></div><div class="tool-row panel"><button id="texture" aria-pressed="true">卫星底图</button><button id="ghost" aria-pressed="true">显示遮挡段</button></div><div class="compass panel"><span id="north">▲<br>N</span></div></nav>
+<nav id="tools" aria-label="地图控制">
+<div class="tool-row panel"><button id="overview" aria-pressed="true">全景</button><button id="top" aria-pressed="false">俯视</button><button id="rotate" aria-pressed="false">旋转</button></div>
+<div class="tool-row panel"><label for="exag">地形高度 <input id="exag" type="range" min="1" max="5" step="0.5" value="3"></label><output id="exag-value">3×</output></div>
+<div class="tool-row panel"><button id="texture" aria-pressed="true">卫星底图</button><button id="ghost" aria-pressed="true">显示遮挡段</button></div>
+<div id="building-controls" class="tool-row panel" hidden><button id="buildings" aria-pressed="false" disabled>城市建筑</button><label for="building-exag">建筑高度 <input id="building-exag" type="range" min="1" max="4" step="0.25" value="1.5" disabled></label><output id="building-exag-value">1.5×</output></div>
+<div id="flight-controls" class="panel" role="group" aria-label="沿线飞行">
+<div class="tool-row"><button id="flight-play" aria-pressed="false" disabled>沿线飞行</button><label for="flight-speed">模拟倍速 <select id="flight-speed"><option value="1">1×</option><option value="2">2×</option><option value="4">4×</option></select></label></div>
+<label class="flight-seek" for="flight-progress">进度 <input id="flight-progress" type="range" min="0" max="1000" step="1" value="0" disabled></label><output id="flight-distance">0.00 / 0.00 km</output>
+</div>
+<div class="compass panel"><span id="north">▲<br>N</span></div></nav>
 <section id="profile" class="panel" aria-label="海拔剖面"><div class="profile-heading"><h2>ELEVATION <span>海拔剖面</span></h2><output id="readout">滑过剖面，查看地图位置</output></div><canvas id="chart" tabindex="0" aria-label="海拔剖面，可用左右方向键浏览路线"></canvas><div class="profile-foot"><span>拖动地图旋转 · 滚轮缩放 · 右键平移</span><span id="record-date">WGS84</span></div></section>
 <div id="point-card" class="panel" hidden><button id="close-card" aria-label="关闭信息">×</button><h2 id="point-name"></h2><p id="point-detail"></p></div>
 <div id="status" role="status">正在加载路线地形…</div>

@@ -3,6 +3,7 @@ import argparse, io, json, math, tempfile, urllib.request, xml.etree.ElementTree
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from PIL import Image
+from check_data import validate_buildings
 
 def merc(lon, lat):
     return (lon + 180) / 360, (1 - math.asinh(math.tan(math.radians(lat))) / math.pi) / 2
@@ -222,8 +223,10 @@ def public_gpx(data):
     result=io.BytesIO();ET.ElementTree(g).write(result,encoding='utf-8',xml_declaration=True)
     return result.getvalue()
 
-def build(gpx,config,out,demo=False):
+def build(gpx,config,out,demo=False,buildings=None):
+    city = validate_buildings(json.loads(Path(buildings).read_text())) if buildings is not None else None
     data=parse_track(gpx,config);w,h=data['widthKm'],data['heightKm'];bounds=data['bounds']['mercator']
+    if city is not None: data['buildingsFile'] = 'buildings.json'
     size=(max(1,round(1200*min(1,w/h))),max(1,round(1200*min(1,h/w))))
     if demo:
         from PIL import ImageDraw
@@ -241,6 +244,7 @@ def build(gpx,config,out,demo=False):
     satellite=io.BytesIO();image.save(satellite,format='JPEG',quality=90)
     outputs={'route.json':json.dumps(data,ensure_ascii=False,separators=(',',':')).encode(),
              'terrain.json':json.dumps(terrain,separators=(',',':')).encode(), 'satellite.jpg':satellite.getvalue(), 'route.gpx':public_gpx(data)}
+    if city is not None: outputs['buildings.json'] = json.dumps(city,ensure_ascii=False,separators=(',',':')).encode()
     # Input parsing and all network work finish before any published data is replaced.
     out=Path(out);out.mkdir(parents=True,exist_ok=True)
     for name,content in outputs.items(): (out/name).write_bytes(content)
@@ -249,7 +253,8 @@ def build(gpx,config,out,demo=False):
 def main():
     ap=argparse.ArgumentParser(description=__doc__);ap.add_argument('gpx',type=Path);ap.add_argument('--config',type=Path,required=True)
     ap.add_argument('--output',type=Path,required=True);ap.add_argument('--demo',action='store_true',help='Use explicitly labelled synthetic imagery and terrain; no network')
-    a=ap.parse_args();config=json.loads(a.config.read_text());data=build(a.gpx,config,a.output,a.demo)
+    ap.add_argument('--buildings',type=Path,help='Optional version 1 building footprints/parts JSON')
+    a=ap.parse_args();config=json.loads(a.config.read_text());data=build(a.gpx,config,a.output,a.demo,a.buildings)
     print(json.dumps({'points':len(data['points']),'stats':data['stats'],'output':str(a.output)},ensure_ascii=False))
 
 if __name__=='__main__': main()
