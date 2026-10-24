@@ -43,35 +43,50 @@ test('concave roof area, outward normals and suspended bottom stay correct in on
 
 // Exercise the actual app handlers, geometry and camera with a CPU renderer/DOM stub.
 // This verifies scene state, not WebGL output, browser layout or visual acceptance.
-async function sceneFixture({buildingsFile='buildings.json',badFetch=false}={}) {
+export async function sceneFixture({buildingsFile='buildings.json',badFetch=false,viewport=[1200,900],towerAhead=0,towerSide=0,flat=false,routeData,terrainData,cityData}={}) {
   const elements=new Map();
+  let [width,height]=viewport;
+  const events=new Map();
+  function rect(id){
+    const mobile=width<760;
+    const bounds=id==='header'?[12,20,width-12,mobile?90:110]:id==='side'?(mobile?[12,height-411,width-12,height-207]:[24,128,302,height-270]):
+      id==='tools'?(mobile?[12,height-509,width-12,height-419]:[width-272,22,width-22,280]):id==='profile'?[12,height-(mobile?197:245),width-12,height-32]:[0,0,width,height];
+    const [left,top,right,bottom]=bounds;return {left,top,right,bottom,width:right-left,height:bottom-top};
+  }
   function element(id){
     if(!elements.has(id))elements.set(id,{id,value:({exag:'3','building-exag':'1.5','flight-progress':'0','flight-speed':'1'})[id]||'',hidden:false,disabled:false,
       textContent:'',style:{setProperty(){}},children:[],attrs:new Map(),classList:{remove(){},toggle(){}},
       append(...items){this.children.push(...items);},setAttribute(k,v){this.attrs.set(k,v);},getAttribute(k){return this.attrs.get(k);},
-      addEventListener(){},cloneNode(){return this;},replaceWith(){},getContext(){return new Proxy({},{get:()=>()=>{}});},getBoundingClientRect(){return {width:1200,height:900,left:0,top:0,bottom:0};}});
+      addEventListener(){},cloneNode(){return this;},replaceWith(){},getContext(){return new Proxy({},{get:()=>()=>{}});},getBoundingClientRect(){return rect(id);}});
     return elements.get(id);
   }
-  let tick,scene,camera,fetches=0;
+  let tick,scene,camera,controls,fetches=0;
   class Renderer {
     constructor(){this.domElement=element('map');this.capabilities={getMaxAnisotropy:()=>1};}
     setPixelRatio(){}setSize(){}setAnimationLoop(fn){tick=fn;}
     render(s,c){scene=s;camera=c;s.updateMatrixWorld();c.updateMatrixWorld();}
   }
   class Controls {
-    constructor(c){this.camera=c;this.target=new THREE.Vector3();this.autoRotate=false;this.listeners={};}
+    constructor(c){controls=this;this.camera=c;this.target=new THREE.Vector3();this.autoRotate=false;this.listeners={};}
     update(){this.camera.lookAt(this.target);}addEventListener(k,fn){this.listeners[k]=fn;}
   }
-  const route=JSON.parse(await readFile(new URL('../data/route.json',import.meta.url),'utf8'));
+  const route=structuredClone(routeData||JSON.parse(await readFile(new URL('../data/route.json',import.meta.url),'utf8')));
   // Use the local demo track, moving a footprint onto its middle for independent-height checks.
   if(buildingsFile!==null)route.buildingsFile=buildingsFile;
-  const p=functions.trackSample(route.points,route.points.at(-1)[3]/2),size=.0001;
-  const buildings={version:1,source:{name:'test',url:'https://example.com',license:'test',extractedOn:'2026-10-24',corridorMeters:500},heightNote:'test estimates',
-    buildings:[footprint({ring:[[p[0],p[1]],[p[0]+size,p[1]],[p[0]+size,p[1]+size],[p[0],p[1]+size]],heightM:339,minHeightM:200})]};
-  const terrain=JSON.parse(await readFile(new URL('../data/terrain.json',import.meta.url),'utf8'));
+  const mid=route.points.at(-1)[3]/2,p=functions.trackSample(route.points,mid),size=.0001;
+  const a=functions.trackSample(route.points,mid-.05),b=functions.trackSample(route.points,mid+.05);
+  const direction=new THREE.Vector2((b[4]-a[4])*route.widthKm,(b[5]-a[5])*route.heightKm).normalize();
+  const [mx0,my0,mx1,my1]=route.bounds.mercator;
+  const mx=mx0+(p[4]+(direction.x*towerAhead-direction.y*towerSide)/route.widthKm)*(mx1-mx0);
+  const my=my0+(p[5]+(direction.y*towerAhead+direction.x*towerSide)/route.heightKm)*(my1-my0);
+  const lon=mx*360-180,lat=Math.atan(Math.sinh(Math.PI*(1-2*my)))*180/Math.PI;
+  const buildings=cityData||{version:1,source:{name:'test',url:'https://example.com',license:'test',extractedOn:'2026-10-24',corridorMeters:500},heightNote:'test estimates',
+    buildings:[footprint({ring:[[lon,lat],[lon+size,lat],[lon+size,lat+size],[lon,lat+size]],heightM:339,minHeightM:200})]};
+  const terrain=structuredClone(terrainData||JSON.parse(await readFile(new URL('../data/terrain.json',import.meta.url),'utf8')));
+  if(flat)terrain.elevations.fill(500);
   const context=vm.createContext({...style,THREE:{...THREE,WebGLRenderer:Renderer,TextureLoader:class{async loadAsync(){return new THREE.Texture();}}},OrbitControls:Controls,
     document:{getElementById:element,createElement:()=>element(Symbol()),createTextNode:text=>({textContent:text}),querySelector:element,querySelectorAll:()=>[]},matchMedia:()=>({matches:false}),
-    innerWidth:1200,innerHeight:900,devicePixelRatio:1,performance:{now:()=>0},addEventListener(){},console:{...console,warn(){}},URL,encodeURIComponent,
+    innerWidth:width,innerHeight:height,devicePixelRatio:1,performance:{now:()=>0},addEventListener(name,fn){events.set(name,fn);},console:{...console,warn(){}},URL,encodeURIComponent,
     Image:class{constructor(){this.width=1200;this.height=1200;}async decode(){}},
     AbortSignal,location:{href:'http://localhost/'},fetch:async()=>{fetches++;if(badFetch)throw new Error('fixture failure');return {ok:true,json:async()=>buildings};}});
   const body=source.replace(/^import .*;\n/gm,'').slice(0,source.replace(/^import .*;\n/gm,'').lastIndexOf('\nmain().catch'));
@@ -79,7 +94,8 @@ async function sceneFixture({buildingsFile='buildings.json',badFetch=false}={}) 
   context.route=route;context.terrain=terrain;
   vm.runInContext('D=route;T=terrain;points=D.points;pointColors=points.map(()=>"#aabbcc");drawProfile=()=>{};',context);
   await vm.runInContext('init3D()',context);await new Promise(r=>setImmediate(r));tick(0);
-  return {element,step:tick,get scene(){return scene;},get camera(){return camera;},get fetches(){return fetches;},point:()=>vm.runInContext('flightPoint',context),flat:()=>vm.runInContext('flatFallback()',context)};
+  return {element,step:tick,rect,get scene(){return scene;},get camera(){return camera;},get controls(){return controls;},get fetches(){return fetches;},point:()=>vm.runInContext('flightPoint',context),flat:()=>vm.runInContext('flatFallback()',context),
+    resize(w,h){width=w;height=h;context.innerWidth=w;context.innerHeight=h;events.get('resize')();}};
 }
 
 test('app handlers move the camera, freeze pause, seek, replay, toggle mesh and interrupt on overview',async()=>{
@@ -128,4 +144,49 @@ test('2D fallback keeps the map path and disables flight controls',async()=>{
   assert.equal(f.element('tools').hidden,true);
   for(const id of ['flight-play','flight-progress','flight-speed'])assert.equal(f.element(id).disabled,true);
   assert.equal(f.fetches,0);
+});
+
+test('pause and manual controls release the camera; a seek and the endpoint do not keep applying clearance',async()=>{
+  const f=await sceneFixture(),e=f.element;
+  e('flight-progress').value='500';e('flight-progress').oninput();f.step(100);
+  const interpolated=Array.from(f.point()),lens=f.camera.projectionMatrix.clone();
+  f.camera.position.y=-.1;f.step(200);
+  assert.equal(f.camera.position.y,-.1);assert.deepEqual(Array.from(f.point()),interpolated);
+  e('flight-play').onclick();f.step(300);f.step(400);e('flight-play').onclick();
+  const paused=e('flight-progress').value;f.camera.position.y=-.1;f.step(500);
+  assert.equal(f.camera.position.y,-.1);assert.equal(e('flight-progress').value,paused);
+  assert.deepEqual(f.camera.projectionMatrix,lens);assert.equal(f.controls.enableDamping,true);
+  e('flight-play').onclick();f.controls.listeners.start();f.camera.position.y=-.1;f.step(600);
+  assert.equal(f.camera.position.y,-.1);assert.equal(e('flight-play').getAttribute('aria-pressed'),'false');
+  e('rotate').onclick();assert.equal(f.controls.autoRotate,true);f.camera.position.y=-.1;f.step(700);assert.equal(f.camera.position.y,-.1);
+  e('overview').onclick();assert.equal(f.camera.fov,38);assert.equal(f.controls.autoRotate,false);
+  e('flight-progress').value='999';e('flight-progress').oninput();e('flight-speed').value='4';e('flight-play').onclick();f.step(800);f.step(900);
+  assert.equal(e('flight-play').getAttribute('aria-pressed'),'false');f.camera.position.y=-.1;f.step(1000);assert.equal(f.camera.position.y,-.1);
+});
+
+test('forward and close side towers fit with the route inside the uncovered desktop/mobile map',async()=>{
+  for(const viewport of [[1280,900],[390,844]])for(const [towerAhead,towerSide] of [[1.1,0],[-.1,.2]]){
+    const f=await sceneFixture({viewport,towerAhead,towerSide,flat:true}),e=f.element;
+    for(const scale of ['1.5','2','4']){
+      e('building-exag').value=scale;e('building-exag').oninput();e('flight-progress').value='500';e('flight-progress').oninput();f.step(100);
+      const box=new THREE.Box3().setFromBufferAttribute(f.scene.getObjectByName('city-buildings').geometry.attributes.position);
+      const [w,h]=viewport,side=f.rect('side'),tools=f.rect('tools'),profile=f.rect('profile');
+      const left=w<760?12:side.right+16,right=w<760?w-12:tools.left-12,top=f.rect('header').bottom+12,bottom=Math.min(profile.top,w<760?Math.min(side.top,tools.top):h)-12;
+      const inside=point=>{
+        const p=point.clone().project(f.camera),x=(p.x+1)*w/2,y=(1-p.y)*h/2;
+        assert(p.z>-1&&p.z<1);assert(x>left&&x<right,`tower/route x=${x} outside ${left}..${right}`);
+        assert(y>top&&y<bottom,`tower/route y=${y} outside ${top}..${bottom}`);
+      };
+      for(const x of [box.min.x,box.max.x])for(const z of [box.min.z,box.max.z])for(const y of [box.min.y,box.max.y])inside(new THREE.Vector3(x,y,z));
+      const point=f.point(),terrain=f.scene.children.find(o=>o.isGroup).children[0];
+      inside(new THREE.Vector3((point[4]-.5)*terrain.geometry.parameters.width,.306, (point[5]-.5)*terrain.geometry.parameters.height));
+      assert(f.camera.position.distanceTo(new THREE.Vector3((point[4]-.5)*terrain.geometry.parameters.width,.3,(point[5]-.5)*terrain.geometry.parameters.height))<3);
+      const marker=f.scene.getObjectByName('route-marker'),center=new THREE.Vector3();marker.getWorldPosition(center);
+      const radius=marker.geometry.parameters.radius*marker.scale.x;
+      const up=new THREE.Vector3(0,radius,0).applyQuaternion(f.camera.quaternion);
+      const high=center.clone().add(up).project(f.camera),low=center.clone().sub(up).project(f.camera);
+      assert(Math.abs((high.y-low.y)*h/2-8)<.1); // circular screen size, independent of terrain exaggeration
+    }
+    e('overview').onclick();assert.equal(f.camera.fov,38);e('top').onclick();assert.equal(f.camera.fov,38);
+  }
 });
