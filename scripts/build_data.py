@@ -3,7 +3,7 @@ import argparse, io, json, math, tempfile, urllib.request, xml.etree.ElementTree
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from PIL import Image
-from check_data import validate_buildings
+from check_data import validate_buildings, validate_imagery_detail
 
 def merc(lon, lat):
     return (lon + 180) / 360, (1 - math.asinh(math.tan(math.radians(lat))) / math.pi) / 2
@@ -19,7 +19,9 @@ def download(url):
 
 def mosaic(bounds, zoom, kind):
     left, top, right, bottom = [v * (2**zoom) * 256 for v in bounds]
-    x0, y0, x1, y1 = math.floor(left/256), math.floor(top/256), math.floor(right/256), math.floor(bottom/256)
+    x0, y0, x1, y1 = math.floor(left/256), math.floor(top/256), math.ceil(right/256)-1, math.ceil(bottom/256)-1
+    # DEM interpolation still needs the sample at an exact eastern/southern tile edge.
+    if kind == 'dem': x1, y1 = math.floor(right/256), math.floor(bottom/256)
     if (x1-x0+1)*(y1-y0+1) > 128: raise ValueError('Tile limit exceeded; lower imageryZoom/demZoom or split this large route')
     coords = [(x,y) for y in range(y0,y1+1) for x in range(x0,x1+1)]
     def tile(c):
@@ -29,7 +31,9 @@ def mosaic(bounds, zoom, kind):
         cache=Path(tempfile.gettempdir())/'joker-outdoor-tile-cache'/f'{kind}-{zoom}-{x}-{y}'
         cache.parent.mkdir(exist_ok=True)
         if not cache.exists(): cache.write_bytes(download(url))
-        return c,Image.open(io.BytesIO(cache.read_bytes())).convert('RGB')
+        image = Image.open(io.BytesIO(cache.read_bytes())).convert('RGB')
+        if image.size != (256,256): raise ValueError('Expected native 256px source tile')
+        return c,image
     image=Image.new('RGB',((x1-x0+1)*256,(y1-y0+1)*256))
     with ThreadPoolExecutor(max_workers=6) as pool:
         for (x,y),im in pool.map(tile,coords): image.paste(im,((x-x0)*256,(y-y0)*256))
@@ -223,9 +227,103 @@ def public_gpx(data):
     result=io.BytesIO();ET.ElementTree(g).write(result,encoding='utf-8',xml_declaration=True)
     return result.getvalue()
 
+def detail_patches(data, zoom):
+    """Aligned 4x4 source-tile blocks; sample segments so sparse GPX cannot leave holes."""
+    if type(zoom) is not int or not 15 <= zoom <= 18: raise ValueError('detailImageryZoom must be an integer in 15..18')
+    bounds = data['bounds']['mercator']
+    mx0, my0, mx1, my1 = bounds
+    scale = data['widthKm'] / (mx1-mx0)
+    block = 4 / 2**zoom
+    # The extra half sample spacing covers the full 600 m corridor between samples.
+    radius = .725 / scale
+    selected = set()
+    def select(x, y):
+        for by in range(max(0, math.floor((y-radius)/block)), min(2**zoom//4-1, math.floor((y+radius)/block))+1):
+            for bx in range(max(0, math.floor((x-radius)/block)), min(2**zoom//4-1, math.floor((x+radius)/block))+1):
+                left, top = max(mx0, bx*block), max(my0, by*block)
+                right, bottom = min(mx1, (bx+1)*block), min(my1, (by+1)*block)
+                if left >= right or top >= bottom: continue
+                dx, dy = max(left-x, 0, x-right), max(top-y, 0, y-bottom)
+                if dx*dx+dy*dy > radius*radius: continue
+                selected.add((bx, by))
+                if len(selected) > 256: raise ValueError('Detail imagery limit exceeded: at most 256 patches / 4096 source tiles')
+    pts = data['points']
+    for a, b in zip(pts, pts[1:]):
+        ax, ay = merc(a[0], a[1]); bx, by = merc(b[0], b[1])
+        steps = max(1, math.ceil(max(distance(a, b), math.hypot(bx-ax, by-ay)*scale) / .25))
+        for i in range(steps+1):
+            t = i/steps; select(ax+(bx-ax)*t, ay+(by-ay)*t)
+    if not selected: raise ValueError('No detail imagery intersects the map')
+    # Aligned blocks never overlap in source tiles; this also bounds total downloads.
+    if len(selected)*16 > 4096: raise ValueError('Detail imagery source tile limit exceeded')
+    return [(bx, by, [max(mx0,bx*block), max(my0,by*block), min(mx1,(bx+1)*block), min(my1,(by+1)*block)])
+            for bx, by in sorted(selected, key=lambda p: (p[1], p[0]))]
+
+def detail_outputs(data, zoom, patches):
+    outputs, rows = {}, []
+    mx0, my0, mx1, my1 = data['bounds']['mercator']
+    block, pixels = 4/2**zoom, 2**zoom*256
+    for x, y, clipped in patches:
+        full = [x*block, y*block, (x+1)*block, (y+1)*block]
+        image, box = mosaic(full, zoom, 'sat')
+        if image.width < 1024 or image.height < 1024: raise ValueError('Detail source imagery is smaller than native 1024px block')
+        left, top, right, bottom = clipped
+        crop = (box[0]+(left-full[0])*pixels, box[1]+(top-full[1])*pixels,
+                box[0]+(right-full[0])*pixels, box[1]+(bottom-full[1])*pixels)
+        size = (max(1, round((right-left)*pixels)), max(1, round((bottom-top)*pixels)))
+        image = image.transform(size, Image.Transform.EXTENT, crop, Image.Resampling.BICUBIC)
+        content = io.BytesIO(); image.save(content, format='JPEG', quality=92)
+        filename = f'imagery-detail/{zoom}-{x}-{y}.jpg'
+        outputs[filename] = content.getvalue()
+        rows.append({'file':filename, 'bounds':[(left-mx0)/(mx1-mx0), (top-my0)/(my1-my0), (right-mx0)/(mx1-mx0), (bottom-my0)/(my1-my0)]})
+    manifest = validate_imagery_detail({'version':1, 'zoom':zoom, 'source':data['imageryCredit'], 'patches':rows})
+    outputs['imagery-detail.json'] = json.dumps(manifest, ensure_ascii=False, separators=(',',':')).encode()
+    return outputs
+
+def install_outputs(out, outputs):
+    """Stage complete files, then replace; restore previous outputs on installation failure."""
+    import shutil
+    out = Path(out); out.parent.mkdir(parents=True, exist_ok=True)
+    tmp = Path(tempfile.mkdtemp(prefix='.route-data-', dir=out.parent)); cleanup = True
+    try:
+        stage, backup = tmp/'stage', tmp/'backup'
+        stage.mkdir(); backup.mkdir()
+        for name, content in outputs.items():
+            path = stage/name; path.parent.mkdir(parents=True, exist_ok=True); path.write_bytes(content)
+        if 'imagery-detail.json' in outputs:
+            validate_imagery_detail(json.loads((stage/'imagery-detail.json').read_text()), stage, json.loads(outputs['route.json'])['bounds']['mercator'])
+        names = [p.name for p in stage.iterdir() if p.name not in ('route.json', 'imagery-detail.json')]
+        if 'imagery-detail.json' in outputs: names.append('imagery-detail.json')
+        names.append('route.json')
+        out.mkdir(parents=True, exist_ok=True)
+        changed = []
+        try:
+            for name in names:
+                target = out/name
+                existed = target.exists()
+                if existed: target.replace(backup/name)
+                changed.append((name, existed))
+                (stage/name).replace(target)
+        except BaseException:
+            cleanup = False
+            try:
+                for name, existed in reversed(changed):
+                    target = out/name
+                    if target.is_dir(): shutil.rmtree(target)
+                    elif target.exists(): target.unlink()
+                    if existed: (backup/name).replace(target)
+            except BaseException as error:
+                raise RuntimeError(f'Output restore failed; previous data retained at {backup}') from error
+            cleanup = True
+            raise
+    finally:
+        if cleanup: shutil.rmtree(tmp)
+
 def build(gpx,config,out,demo=False,buildings=None):
     city = validate_buildings(json.loads(Path(buildings).read_text())) if buildings is not None else None
     data=parse_track(gpx,config);w,h=data['widthKm'],data['heightKm'];bounds=data['bounds']['mercator']
+    detail = detail_patches(data, config['detailImageryZoom']) if 'detailImageryZoom' in config else None
+    if demo and detail is not None: raise ValueError('detailImageryZoom requires real imagery; omit it for --demo')
     if city is not None: data['buildingsFile'] = 'buildings.json'
     size=(max(1,round(1200*min(1,w/h))),max(1,round(1200*min(1,h/w))))
     if demo:
@@ -242,12 +340,14 @@ def build(gpx,config,out,demo=False,buildings=None):
         image,box=mosaic(bounds,z,'sat');image=image.transform(size,Image.Transform.EXTENT,box,Image.Resampling.BICUBIC)
         terrain=terrain_data(bounds,w,h,dz)
     satellite=io.BytesIO();image.save(satellite,format='JPEG',quality=90)
-    outputs={'route.json':json.dumps(data,ensure_ascii=False,separators=(',',':')).encode(),
-             'terrain.json':json.dumps(terrain,separators=(',',':')).encode(), 'satellite.jpg':satellite.getvalue(), 'route.gpx':public_gpx(data)}
+    outputs={'terrain.json':json.dumps(terrain,separators=(',',':')).encode(), 'satellite.jpg':satellite.getvalue(), 'route.gpx':public_gpx(data)}
+    if detail is not None:
+        outputs.update(detail_outputs(data, config['detailImageryZoom'], detail))
+        data['imageryDetailFile'] = 'imagery-detail.json'
+    outputs['route.json'] = json.dumps(data,ensure_ascii=False,separators=(',',':')).encode()
     if city is not None: outputs['buildings.json'] = json.dumps(city,ensure_ascii=False,separators=(',',':')).encode()
     # Input parsing and all network work finish before any published data is replaced.
-    out=Path(out);out.mkdir(parents=True,exist_ok=True)
-    for name,content in outputs.items(): (out/name).write_bytes(content)
+    install_outputs(out, outputs)
     return data
 
 def main():

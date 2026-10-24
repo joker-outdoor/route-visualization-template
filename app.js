@@ -11,6 +11,98 @@ const markerLabels = [];
 let endpointMarkers = [];
 let pauseFlight = () => {}, flightPoint = null;
 
+function localDataUrl(filename) {
+  if (typeof filename !== 'string' || /[\\?#:]/.test(filename) || !filename.split('/').every(p => p && p !== '.' && p !== '..')) throw new Error('Invalid data filename');
+  return 'data/' + filename.split('/').map(encodeURIComponent).join('/');
+}
+
+function imageryManifest(data) {
+  if (!data || data.version !== 1 || !Number.isInteger(data.zoom) || data.zoom < 15 || data.zoom > 18
+    || typeof data.source !== 'string' || !data.source.trim() || !Array.isArray(data.patches) || !data.patches.length || data.patches.length > 256) throw new Error('Invalid imagery manifest');
+  const files = new Set();
+  for (const p of data.patches) {
+    if (!p || typeof p.file !== 'string' || !/^imagery-detail\/[A-Za-z0-9_./-]+\.jpg$/.test(p.file) || files.has(p.file)
+      || !Array.isArray(p.bounds) || p.bounds.length !== 4 || !p.bounds.every(Number.isFinite)) throw new Error('Invalid imagery patch');
+    localDataUrl(p.file); files.add(p.file);
+    const [u0, v0, u1, v1] = p.bounds;
+    if (!(0 <= u0 && u0 < u1 && u1 <= 1 && 0 <= v0 && v0 < v1 && v1 <= 1)) throw new Error('Invalid imagery bounds');
+  }
+  return data;
+}
+
+function imageryDetailLayer({manifest, geometry, world, renderer, camera, controls, W, H, surfaceY, enabled}) {
+  const loaded = new Map(), loading = new Map(), failed = new Set();
+  const loader = new THREE.TextureLoader();
+  let wanted = new Map(), active = 0, lastUpdate = -Infinity, stopped = false;
+  function dispose(mesh) {
+    world.remove(mesh); mesh.material.map.dispose(); mesh.material.dispose();
+    // All patch meshes share the original terrain geometry, which stays alive.
+  }
+  function pump() {
+    for (const [file, patch] of wanted) {
+      if (active >= 4 || loaded.size + active >= 12) break;
+      if (loaded.has(file) || loading.has(file) || failed.has(file)) continue;
+      const request = {patch}; loading.set(file, request); active++;
+      loader.loadAsync(localDataUrl(file)).then(texture => {
+        if (stopped || !enabled() || request.patch !== patch || wanted.get(file) !== patch || loading.get(file) !== request) { texture.dispose(); return; }
+        if (!texture.image || ![texture.image.width, texture.image.height].every(v => Number.isInteger(v) && v >= 1 && v <= 1024)) { texture.dispose(); failed.add(file); return; }
+        const [u0, v0, u1, v1] = patch.bounds;
+        texture.colorSpace = THREE.SRGBColorSpace;
+        texture.anisotropy = Math.min(8, renderer.capabilities.getMaxAnisotropy());
+        // Plane UV v=1 is north, whereas manifest v=0 is north.
+        texture.repeat.set(1/(u1-u0), 1/(v1-v0));
+        texture.offset.set(-u0/(u1-u0), -(1-v1)/(v1-v0));
+        const material = new THREE.MeshStandardMaterial({map:texture, color:'#ffffff', roughness:1,
+          polygonOffset:true, polygonOffsetFactor:-1, polygonOffsetUnits:-1,
+          clippingPlanes:[new THREE.Plane(new THREE.Vector3(1,0,0), -((u0-.5)*W)),
+            new THREE.Plane(new THREE.Vector3(-1,0,0), (u1-.5)*W),
+            new THREE.Plane(new THREE.Vector3(0,0,1), -((v0-.5)*H)),
+            new THREE.Plane(new THREE.Vector3(0,0,-1), (v1-.5)*H)]});
+        const mesh = new THREE.Mesh(geometry, material); mesh.name = 'imagery-detail'; mesh.renderOrder = 1;
+        world.add(mesh); loaded.set(file, mesh);
+      }, () => { failed.add(file); }).finally(() => {
+        loading.delete(file); active--; pump();
+      });
+    }
+  }
+  function clear() {
+    if (!wanted.size && !loaded.size) return;
+    wanted = new Map();
+    // Invalidate outstanding requests even if the same patch becomes wanted again.
+    for (const request of loading.values()) request.patch = null;
+    for (const mesh of loaded.values()) dispose(mesh);
+    loaded.clear();
+  }
+  return {
+    clear,
+    stop() { stopped = true; clear(); },
+    update(now) {
+      if (stopped) return;
+      if (!enabled()) { clear(); return; }
+      if (now-lastUpdate < 250) return;
+      lastUpdate = now;
+      const target = controls.target, direction = target.clone().sub(camera.position).normalize();
+      const ground = surfaceY(target.x, target.z) * world.scale.y;
+      if (camera.position.distanceTo(target) > 2.5 || camera.position.y-ground > 1.5) { clear(); return; }
+      // Ground intersection follows the view when orbiting; ahead covers incoming flight tiles.
+      const travel = direction.y < -.05 ? Math.max(0, Math.min(3, (ground-camera.position.y)/direction.y)) : 0;
+      const anchor = camera.position.clone().addScaledVector(direction, travel);
+      const ahead = target.clone().add(new THREE.Vector3(direction.x,0,direction.z).normalize().multiplyScalar(.6));
+      const rows = manifest.patches.map(p => {
+        const [u0,v0,u1,v1] = p.bounds, x0=(u0-.5)*W, x1=(u1-.5)*W, z0=(v0-.5)*H, z1=(v1-.5)*H;
+        const distance = q => Math.hypot(Math.max(x0-q.x,0,q.x-x1), Math.max(z0-q.z,0,q.z-z1));
+        const near = Math.min(distance(target), distance(anchor), distance(ahead));
+        return {p, near, score:near + .05*Math.hypot((x0+x1)/2-target.x, (z0+z1)/2-target.z)};
+      }).filter(row => row.near <= 1.2).sort((a,b) => a.score-b.score).slice(0,12);
+      const next = new Map(rows.map(({p}) => [p.file,p]));
+      for (const [file, request] of loading) if (!next.has(file)) request.patch = null;
+      wanted = next;
+      for (const [file, mesh] of loaded) if (!wanted.has(file)) { dispose(mesh); loaded.delete(file); }
+      pump();
+    }
+  };
+}
+
 // Interpolate adjacent original points, including routes with repeated distances.
 function trackSample(track, km) {
   km = Math.max(0, Math.min(track.at(-1)[3], km));
@@ -240,6 +332,7 @@ function sample(u, v) {
 async function init3D() {
   const renderer = new THREE.WebGLRenderer({ canvas: $('map'), antialias: true });
   renderer.setPixelRatio(Math.min(devicePixelRatio, 2)); renderer.outputColorSpace = THREE.SRGBColorSpace;
+  renderer.localClippingEnabled = true;
   const scene = new THREE.Scene(); scene.background = new THREE.Color('#0a1218');
   const extent = Math.max(D.widthKm, D.heightKm);
   const camera = new THREE.PerspectiveCamera(38, 1, extent / 10000, extent * 20);
@@ -266,9 +359,7 @@ async function init3D() {
     if (D.buildingsFile === undefined) return;
     $('building-note').hidden = false;
     try {
-      const filename = D.buildingsFile;
-      if (typeof filename !== 'string' || /[\\?#:]/.test(filename) || !filename.split('/').every(p => p && p !== '.' && p !== '..')) throw new Error('Invalid buildingsFile');
-      const response = await fetch('data/' + filename.split('/').map(encodeURIComponent).join('/'), { signal: AbortSignal.timeout(12000) });
+      const response = await fetch(localDataUrl(D.buildingsFile), { signal: AbortSignal.timeout(12000) });
       if (!response.ok) throw new Error(`HTTP ${response.status}`);
       const data = await response.json();
       if (data.version !== 1 || !Array.isArray(data.buildings) || !data.source || !['name', 'url', 'license', 'extractedOn'].every(k => typeof data.source[k] === 'string' && data.source[k].trim())
@@ -334,6 +425,17 @@ async function init3D() {
   const texture = await new THREE.TextureLoader().loadAsync('data/satellite.jpg'); texture.colorSpace = THREE.SRGBColorSpace; texture.anisotropy = Math.min(8, renderer.capabilities.getMaxAnisotropy());
   const material = new THREE.MeshStandardMaterial({ map: texture, color: '#ffffff', roughness: 1 });
   world.add(new THREE.Mesh(geometry, material));
+  let detailLayer = null;
+  async function loadDetailImagery() {
+    if (D.imageryDetailFile === undefined) return;
+    try {
+      const response = await fetch(localDataUrl(D.imageryDetailFile), {signal:AbortSignal.timeout(12000)});
+      if (!response.ok) throw new Error(`HTTP ${response.status}`);
+      const manifest = imageryManifest(await response.json());
+      detailLayer = imageryDetailLayer({manifest, geometry, world, renderer, camera, controls, W, H,
+        surfaceY:(x,z) => xyz(x/W+.5,z/H+.5).y, enabled:() => material.map !== null});
+    } catch (error) { console.warn('Detail imagery unavailable; using overview:', error); }
+  }
   // Solid sides give the terrain slab a readable edge. Top elevations use the same grid as the DEM mesh.
   const edgeMat = new THREE.MeshStandardMaterial({ color: '#20323a', roughness: 1, side: THREE.DoubleSide });
   for (const [u0, v0, u1, v1, count] of [[0, 0, 1, 0, T.w], [0, 1, 1, 1, T.w], [0, 0, 0, 1, T.h], [1, 0, 1, 1, T.h]]) {
@@ -512,7 +614,7 @@ async function init3D() {
   $('top').onclick = () => { setPreset('top'); moveCamera(topPosition(), new THREE.Vector3(0, .2, 0)); };
   $('rotate').onclick = () => { pauseFlight(); transition = null; setPreset(null); controls.autoRotate = !controls.autoRotate; $('rotate').setAttribute('aria-pressed', String(controls.autoRotate)); };
   $('ghost').onclick = () => { ghost.visible = !ghost.visible; $('ghost').setAttribute('aria-pressed', String(ghost.visible)); };
-  $('texture').onclick = () => { const on = material.map === null; material.map = on ? texture : null; material.color.set(on ? '#ffffff' : '#42605a'); material.needsUpdate = true; $('texture').setAttribute('aria-pressed', String(on)); };
+  $('texture').onclick = () => { const on = material.map === null; material.map = on ? texture : null; material.color.set(on ? '#ffffff' : '#42605a'); material.needsUpdate = true; $('texture').setAttribute('aria-pressed', String(on)); if (!on) detailLayer?.clear(); };
   function exaggerate() { world.scale.y = Number($('exag').value); $('exag-value').textContent = `${world.scale.y}×`; updateBuildings(); }
   $('exag').oninput = exaggerate; exaggerate();
   focus = p => { setPreset(null); const target = routePosition(p); target.y *= world.scale.y; moveCamera(target.clone().add(new THREE.Vector3(.27, .36, .45).multiplyScalar(extent)), target); };
@@ -553,6 +655,7 @@ async function init3D() {
         const scale = radius / (extent * .005); marker.scale.set(scale, scale / world.scale.y, scale);
       } else marker.scale.setScalar(1);
     } else marker.visible = false;
+    detailLayer?.update(now);
     renderer.render(scene, camera);
     renderEndpointMarkers(endpointMarkers.map(item => {
       const p = routePosition(points[item.index]).applyMatrix4(world.matrixWorld).project(camera);
@@ -576,9 +679,10 @@ async function init3D() {
     }
     $('north').style.transform = `rotate(${Math.atan2(camera.position.x - controls.target.x, camera.position.z - controls.target.z)}rad)`;
   });
-  renderer.domElement.addEventListener('webglcontextlost', e => { e.preventDefault(); $('status').hidden = false; $('status').textContent = '3D 图形上下文已中断，请刷新页面恢复。'; });
+  renderer.domElement.addEventListener('webglcontextlost', e => { e.preventDefault(); detailLayer?.stop(); $('status').hidden = false; $('status').textContent = '3D 图形上下文已中断，请刷新页面恢复。'; });
   // Terrain is already rendering and flight is active while optional city data loads.
   if (D.buildingsFile !== undefined) { $('status').textContent = '正在加载城市建筑…'; $('status').style.top = '80px'; }
+  void loadDetailImagery();
   await loadBuildings();
 }
 async function flatFallback() {
