@@ -1,7 +1,7 @@
 import tempfile, unittest, xml.etree.ElementTree as ET
 from pathlib import Path
 from build_data import parse_track, build
-from check_data import check
+from check_data import check, validate_buildings
 
 class RouteTests(unittest.TestCase):
     def setUp(self):
@@ -55,6 +55,64 @@ class RouteTests(unittest.TestCase):
         self.write(ele=False);out=Path(self.tmp.name)/'data';out.mkdir();(out/'route.json').write_text('unchanged')
         with self.assertRaises(ValueError): build(self.p,self.config,out,True)
         self.assertEqual((out/'route.json').read_text(),'unchanged')
+
+class BuildingTests(unittest.TestCase):
+    setUp = RouteTests.setUp
+    write = RouteTests.write
+    def city(self):
+        return {'version':1, 'source':{'name':'OSM test','url':'https://www.openstreetmap.org/copyright',
+                'license':'ODbL-1.0','extractedOn':'2026-10-24','corridorMeters':500}, 'heightNote':'3m per level; default 12m',
+                'buildings':[{'id':'part/1','ring':[[104,30],[104.001,30],[104.001,30.001],[104.0005,30.0005],[104,30.001]],
+                              'heightM':339,'minHeightM':200,'heightSource':'osm-height','part':True}]}
+    def test_optional_city_roundtrip_and_legacy_call(self):
+        import json
+        self.write();out=Path(self.tmp.name)/'data';city=self.city();f=Path(self.tmp.name)/'city.json';f.write_text(json.dumps(city))
+        data=build(self.p,self.config,out,True,buildings=f)
+        self.assertEqual(data['buildingsFile'],'buildings.json')
+        self.assertEqual(json.loads((out/'buildings.json').read_text()),city);check(out)
+        self.assertNotIn('buildingsFile',build(self.p,self.config,out,True));check(out)
+    def test_invalid_city_leaves_existing_outputs_untouched(self):
+        import json
+        self.write();out=Path(self.tmp.name)/'data';out.mkdir();(out/'route.json').write_text('unchanged')
+        f=Path(self.tmp.name)/'city.json';city=self.city();city['buildings'][0]['heightM']=1001;f.write_text(json.dumps(city))
+        with self.assertRaisesRegex(ValueError,'height'): build(self.p,self.config,out,True,buildings=f)
+        self.assertEqual((out/'route.json').read_text(),'unchanged');self.assertFalse((out/'buildings.json').exists())
+    def test_height_and_coordinate_boundaries(self):
+        import copy
+        city=self.city()
+        for low,high in [(0,12),(0,1000),(338.9,339)]:
+            b=copy.deepcopy(city);b['buildings'][0].update(minHeightM=low,heightM=high);validate_buildings(b)
+        for low,high in [(-1,12),(12,12),(13,12),(0,1001),(0,float('nan')),(0,float('inf')),(0,True),(None,12)]:
+            with self.subTest(low=low,high=high):
+                b=copy.deepcopy(city);b['buildings'][0].update(minHeightM=low,heightM=high)
+                with self.assertRaises(ValueError): validate_buildings(b)
+        for ring in [[[104,30],[104,30],[104,30]], [[104,30],[105,30],[104,31],[104,30]],
+                     [[104,30],[105,float('nan')],[104,31]], [[104,30],[105,30],[106,30]], [[104,30],[181,31],[104,31]]]:
+            b=copy.deepcopy(city);b['buildings'][0]['ring']=ring
+            with self.assertRaises(ValueError): validate_buildings(b)
+    def test_required_metadata_and_building_fields(self):
+        import copy
+        for key in ('heightM','minHeightM','heightSource','part','ring','id'):
+            b=self.city();del b['buildings'][0][key]
+            with self.assertRaises(ValueError): validate_buildings(b)
+        for key in ('source','heightNote','version','buildings'):
+            b=self.city();del b[key]
+            with self.assertRaises(ValueError): validate_buildings(b)
+        b=self.city();b['buildings'][0]['heightSource']='unknown'
+        with self.assertRaises(ValueError): validate_buildings(b)
+        for source in ('osm-height','osm-levels','osm-estimate','default-estimate'):
+            b=copy.deepcopy(self.city());b['buildings'][0]['heightSource']=source;validate_buildings(b)
+    def test_checker_rejects_missing_file_traversal_symlink_and_bad_height(self):
+        import json
+        self.write();out=Path(self.tmp.name)/'data';build(self.p,self.config,out,True)
+        f=out/'route.json';original=json.loads(f.read_text());outside=Path(self.tmp.name)/'outside.json';outside.write_text(json.dumps(self.city()))
+        (out/'escape.json').symlink_to(outside)
+        for filename in ('../outside.json',str(outside),'escape.json','missing.json'):
+            data=dict(original,buildingsFile=filename);f.write_text(json.dumps(data))
+            with self.assertRaises((ValueError,FileNotFoundError)): check(out)
+        data=dict(original,buildingsFile='buildings.json');f.write_text(json.dumps(data));city=self.city();city['buildings'][0]['minHeightM']=340
+        (out/'buildings.json').write_text(json.dumps(city))
+        with self.assertRaisesRegex(ValueError,'height'): check(out)
 
 class MotionTests(unittest.TestCase):
     setUp = RouteTests.setUp

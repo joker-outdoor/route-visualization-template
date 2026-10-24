@@ -9,6 +9,60 @@ let D, T, points, selection = null, selectedLandmark = null, renderMap = () => {
 const chart = $('chart'), ctx = chart.getContext('2d');
 const markerLabels = [];
 let endpointMarkers = [];
+let pauseFlight = () => {}, flightPoint = null;
+
+// Interpolate adjacent original points, including routes with repeated distances.
+function trackSample(track, km) {
+  km = Math.max(0, Math.min(track.at(-1)[3], km));
+  let lo = 0, hi = track.length - 1;
+  while (lo < hi) { const mid = (lo + hi) >> 1; if (track[mid][3] <= km) lo = mid + 1; else hi = mid; }
+  const end = lo, start = Math.max(0, end - 1), span = track[end][3] - track[start][3];
+  const t = span > 0 ? (km - track[start][3]) / span : 0;
+  return track[start].map((v, i) => i === 3 ? km : v + (track[end][i] - v) * t);
+}
+
+// One non-indexed mesh: flat roof/side normals, concave roofs, independent suspended parts.
+function cityGeometry(rows, project) {
+  const positions = [], grounds = [], offsets = [], colors = [], roofs = [];
+  const sources = new Set(['osm-height', 'osm-levels', 'osm-estimate', 'default-estimate']);
+  let skipped = 0;
+  for (const b of rows) {
+    try {
+      if (!b || !Array.isArray(b.ring) || b.ring.length < 3 || typeof b.id !== 'string' || typeof b.part !== 'boolean'
+        || !Number.isFinite(b.heightM) || !Number.isFinite(b.minHeightM) || b.minHeightM < 0 || b.minHeightM >= b.heightM || b.heightM > 1000
+        || !sources.has(b.heightSource)) throw new Error('Invalid building');
+      if (!b.ring.every(p => Array.isArray(p) && p.length === 2 && p.every(Number.isFinite) && Math.abs(p[0]) <= 180 && Math.abs(p[1]) <= 85.051129)
+        || new Set(b.ring.map(p => p.join(','))).size < 3 || b.ring[0].join(',') === b.ring.at(-1).join(',')) throw new Error('Invalid ring');
+      const ring = b.ring.map(p => project(...p));
+      const contour = ring.map(p => new THREE.Vector2(p.x, p.z));
+      if (Math.abs(THREE.ShapeUtils.area(contour)) < 1e-12) throw new Error('Empty ring');
+      if (!THREE.ShapeUtils.isClockWise(contour)) { contour.reverse(); ring.reverse(); }
+      const triangles = THREE.ShapeUtils.triangulateShape(contour, []);
+      if (triangles.length !== ring.length - 2) throw new Error('Incomplete roof');
+      const tint = new THREE.Color(/^#[0-9a-f]{6}$/i.test(b.color || '') ? b.color : b.part ? '#b5c4cf' : '#d0cebf');
+      const vertex = (i, h) => { const p = ring[i]; positions.push(p.x, 0, p.z); grounds.push(p.y); offsets.push(h / 1000); colors.push(tint.r, tint.g, tint.b); };
+      for (const triangle of triangles) {
+        let [a, c, d] = triangle;
+        const p = ring[a], q = ring[c], r = ring[d];
+        if ((q.z-p.z)*(r.x-p.x)-(q.x-p.x)*(r.z-p.z) < 0) [c, d] = [d, c];
+        for (const i of [a, c, d]) vertex(i, b.heightM);
+        for (const i of [a, d, c]) vertex(i, b.minHeightM);
+      }
+      for (let i = 0; i < ring.length; i++) {
+        const j = (i + 1) % ring.length;
+        vertex(i, b.minHeightM); vertex(j, b.minHeightM); vertex(j, b.heightM);
+        vertex(i, b.minHeightM); vertex(j, b.heightM); vertex(i, b.heightM);
+      }
+      roofs.push({ minX: Math.min(...ring.map(p => p.x)), maxX: Math.max(...ring.map(p => p.x)),
+        minZ: Math.min(...ring.map(p => p.z)), maxZ: Math.max(...ring.map(p => p.z)),
+        ground: Math.max(...ring.map(p => p.y)), height: b.heightM / 1000 });
+    } catch { skipped++; }
+  }
+  const geometry = new THREE.BufferGeometry();
+  geometry.setAttribute('position', new THREE.Float32BufferAttribute(positions, 3));
+  geometry.setAttribute('color', new THREE.Float32BufferAttribute(colors, 3));
+  return { geometry, grounds: new Float32Array(grounds), offsets: new Float32Array(offsets), roofs, skipped };
+}
 
 function nearest(km) {
   let lo = 0, hi = points.length - 1;
@@ -16,6 +70,7 @@ function nearest(km) {
   return lo > 0 && Math.abs(points[lo - 1][3] - km) < Math.abs(points[lo][3] - km) ? lo - 1 : lo;
 }
 function select(index, landmark = null, showCard = false) {
+  pauseFlight(); flightPoint = null;
   selection = index; selectedLandmark = landmark;
   document.querySelectorAll('#landmark-list button').forEach((el, i) => el.classList.toggle('active', i === landmark));
   markerLabels.forEach(m => m.el.classList.toggle('active', m.landmark === landmark && landmark !== null));
@@ -62,7 +117,7 @@ function drawProfile() {
     ctx.font = '10px system-ui'; ctx.textAlign = 'center'; ctx.fillText(String(i + 1), x, 12);
   });
   if (selection !== null) {
-    const p = points[selection], x = X(p[3]), y = Y(p[2]);
+    const p = flightPoint || points[selection], x = X(p[3]), y = Y(p[2]);
     ctx.strokeStyle = '#ffffff88'; ctx.beginPath(); ctx.moveTo(x, g.t); ctx.lineTo(x, g.h - g.b); ctx.stroke();
     ctx.fillStyle = '#fff'; ctx.beginPath(); ctx.arc(x, y, 4, 0, Math.PI * 2); ctx.fill();
   }
@@ -188,13 +243,89 @@ async function init3D() {
   const scene = new THREE.Scene(); scene.background = new THREE.Color('#0a1218');
   const extent = Math.max(D.widthKm, D.heightKm);
   const camera = new THREE.PerspectiveCamera(38, 1, extent / 10000, extent * 20);
-  const controls = new OrbitControls(camera, $('map')); controls.enableDamping = true; controls.minDistance = extent * .05; controls.maxDistance = extent * 12; controls.maxPolarAngle = Math.PI * .48; controls.autoRotateSpeed = .7;
+  const controls = new OrbitControls(camera, $('map')); controls.enableDamping = !reducedMotion; controls.minDistance = .04; controls.maxDistance = extent * 12; controls.maxPolarAngle = Math.PI * .48; controls.autoRotateSpeed = .7;
   scene.add(new THREE.HemisphereLight('#f2f7ed', '#243e48', 1.6));
   const sunlight = new THREE.DirectionalLight('#fff1d6', 1.4); sunlight.position.set(-5, 12, 8); scene.add(sunlight);
   const world = new THREE.Group(); scene.add(world);
   const base = Math.min(...T.elevations) - 100, W = D.widthKm, H = D.heightKm;
   const xyz = (u, v, height = sample(u, v)) => new THREE.Vector3((u - .5) * W, (height - base) / 1000, (v - .5) * H);
-  const routePosition = p => xyz(p[4], p[5], sample(p[4], p[5]) + extent * 1.05);
+  const routePosition = p => xyz(p[4], p[5], sample(p[4], p[5]) + (D.buildingsFile ? 2 : extent * 1.05));
+  let city = null, cityMesh = null;
+  const roofGrid = new Map(), cellSize = .25;
+  const buildingScale = () => Number($('building-exag').value);
+  function updateBuildings() {
+    $('building-exag-value').textContent = `${buildingScale()}×`;
+    if (!city) return;
+    const position = city.geometry.attributes.position;
+    for (let i = 0; i < position.count; i++) position.setY(i, city.grounds[i] * world.scale.y + city.offsets[i] * buildingScale());
+    position.needsUpdate = true; city.geometry.computeVertexNormals(); city.geometry.computeBoundingSphere();
+  }
+  async function loadBuildings() {
+    if (D.buildingsFile === undefined) return;
+    $('building-note').hidden = false;
+    try {
+      const filename = D.buildingsFile;
+      if (typeof filename !== 'string' || /[\\?#:]/.test(filename) || !filename.split('/').every(p => p && p !== '.' && p !== '..')) throw new Error('Invalid buildingsFile');
+      const response = await fetch('data/' + filename.split('/').map(encodeURIComponent).join('/'), { signal: AbortSignal.timeout(12000) });
+      if (!response.ok) throw new Error(`HTTP ${response.status}`);
+      const data = await response.json();
+      if (data.version !== 1 || !Array.isArray(data.buildings) || !data.source || !['name', 'url', 'license', 'extractedOn'].every(k => typeof data.source[k] === 'string' && data.source[k].trim())
+        || !Number.isFinite(data.source.corridorMeters) || data.source.corridorMeters <= 0 || typeof data.heightNote !== 'string' || !data.heightNote.trim()) throw new Error('Invalid building data');
+      const [mx0, my0, mx1, my1] = D.bounds.mercator;
+      city = cityGeometry(data.buildings, (lon, lat) => {
+        const mx = (lon + 180) / 360, my = (1 - Math.asinh(Math.tan(lat * Math.PI / 180)) / Math.PI) / 2;
+        const u = (mx - mx0) / (mx1 - mx0), v = (my - my0) / (my1 - my0);
+        if (u < -.05 || u > 1.05 || v < -.05 || v > 1.05) throw new Error('Footprint outside terrain');
+        return xyz(u, v);
+      });
+      if (!city.roofs.length) { city.geometry.dispose(); city = null; throw new Error('No usable footprints'); }
+      updateBuildings();
+      cityMesh = new THREE.Mesh(city.geometry, new THREE.MeshStandardMaterial({ vertexColors: true, roughness: .85, flatShading: true }));
+      cityMesh.name = 'city-buildings'; scene.add(cityMesh);
+      // Cache roof bounds once; flight queries only the cells near the camera's movement.
+      for (const roof of city.roofs) {
+        for (let x = Math.floor((roof.minX - .035) / cellSize); x <= Math.floor((roof.maxX + .035) / cellSize); x++) {
+          for (let z = Math.floor((roof.minZ - .035) / cellSize); z <= Math.floor((roof.maxZ + .035) / cellSize); z++) {
+            const key = `${x},${z}`;
+            if (!roofGrid.has(key)) roofGrid.set(key, []);
+            roofGrid.get(key).push(roof);
+          }
+        }
+      }
+      $('building-controls').hidden = false; $('buildings').disabled = false; $('building-exag').disabled = false;
+      $('buildings').setAttribute('aria-pressed', 'true');
+      $('building-note').textContent = `建筑轮廓与部件：${data.source.name}（${data.source.license}），提取于 ${data.source.extractedOn}，沿线 ${data.source.corridorMeters} m 范围。显示 ${city.roofs.length} 项${city.skipped ? `，跳过 ${city.skipped} 项无效轮廓` : ''}。高度含来源标注及估值：楼层按 3 m/层，缺省 12 m；建筑默认夸张 1.5 倍，独立于地形。${data.heightNote} `;
+      const link = document.createElement('a');
+      if (/^https?:\/\//i.test(data.source.url)) { link.href = data.source.url; link.textContent = '建筑数据来源'; link.target = '_blank'; link.rel = 'noopener'; $('building-note').append(link); }
+    } catch (error) {
+      console.warn('Buildings unavailable:', error);
+      $('building-note').textContent = '城市建筑数据不可用；地形与沿线飞行仍可使用。';
+    }
+  }
+  $('buildings').onclick = () => { if (cityMesh) { cityMesh.visible = !cityMesh.visible; $('buildings').setAttribute('aria-pressed', String(cityMesh.visible)); } };
+  $('building-exag').oninput = updateBuildings;
+  // Conservative roof boxes also cover concave footprints and thin tower parts.
+  function clearance(from, to) {
+    let height = 0;
+    const distance = Math.hypot(to.x - from.x, to.z - from.z), steps = Math.max(1, Math.ceil(distance / .02));
+    const checked = new Set();
+    for (let i = 0; i <= steps; i++) {
+      const x = from.x + (to.x - from.x) * i / steps, z = from.z + (to.z - from.z) * i / steps;
+      height = Math.max(height, xyz(x / W + .5, z / H + .5).y * world.scale.y + .06);
+      for (const roof of roofGrid.get(`${Math.floor(x / cellSize)},${Math.floor(z / cellSize)}`) || []) {
+        if (checked.has(roof)) continue;
+        // Use segment/expanded-box intersection, so tiny parts between samples are retained.
+        let enter = 0, exit = 1;
+        for (const [a, delta, min, max] of [[from.x, to.x-from.x, roof.minX-.035, roof.maxX+.035], [from.z, to.z-from.z, roof.minZ-.035, roof.maxZ+.035]]) {
+          if (Math.abs(delta) < 1e-10) { if (a < min || a > max) exit = -1; }
+          else { const t0 = (min-a)/delta, t1 = (max-a)/delta; enter = Math.max(enter, Math.min(t0,t1)); exit = Math.min(exit, Math.max(t0,t1)); }
+        }
+        if (enter <= exit) height = Math.max(height, roof.ground * world.scale.y + roof.height * buildingScale() + .065);
+        checked.add(roof);
+      }
+    }
+    return height;
+  }
   const geometry = new THREE.PlaneGeometry(W, H, T.w - 1, T.h - 1); geometry.rotateX(-Math.PI / 2);
   T.elevations.forEach((e, i) => geometry.attributes.position.setY(i, (e - base) / 1000)); geometry.computeVertexNormals();
   const texture = await new THREE.TextureLoader().loadAsync('data/satellite.jpg'); texture.colorSpace = THREE.SRGBColorSpace; texture.anisotropy = Math.min(8, renderer.capabilities.getMaxAnisotropy());
@@ -217,7 +348,7 @@ async function init3D() {
   const routeLine = new THREE.LineSegments(routeGeo, new THREE.LineBasicMaterial({ vertexColors: true, depthTest: true })); world.add(routeLine);
   const curve = new THREE.CurvePath();
   for (let i = 1; i < vertices.length; i++) if (vertices[i].distanceToSquared(vertices[i - 1]) > 0) curve.add(new THREE.LineCurve3(vertices[i - 1], vertices[i]));
-  const tube = new THREE.Mesh(new THREE.TubeGeometry(curve, Math.min(points.length * 2, 20000), extent * .0012, 5, false), new THREE.MeshBasicMaterial({ vertexColors: true })); world.add(tube);
+  const tube = new THREE.Mesh(new THREE.TubeGeometry(curve, Math.min(points.length * 2, 20000), D.buildingsFile ? .003 : extent * .0012, 5, false), new THREE.MeshBasicMaterial({ vertexColors: true })); world.add(tube);
   const ghost = new THREE.LineSegments(routeGeo, new THREE.LineBasicMaterial({ vertexColors: true, opacity: .25, transparent: true, depthTest: false, depthWrite: false })); ghost.renderOrder = 3; world.add(ghost);
   const lengths = [0];
   for (let i = 1; i < vertices.length; i++) lengths.push(lengths[i-1] + vertices[i].distanceTo(vertices[i-1]));
@@ -234,9 +365,9 @@ async function init3D() {
   const maxIdx = points.reduce((best, p, i) => p[2] > points[best][2] ? i : best, 0);
   labelDefinitions.push({ name: `${Math.round(D.stats.maxM)} m`, code: '▲', p: points[maxIdx], index: maxIdx, cls: 'peak' });
   for (const item of labelDefinitions) {
-    const p = routePosition(item.p), top = p.clone(); top.y += extent * .015;
+    const p = routePosition(item.p), top = p.clone(); top.y += D.buildingsFile ? .025 : extent * .015;
     const pole = new THREE.Line(new THREE.BufferGeometry().setFromPoints([p, top]), new THREE.LineBasicMaterial({ color: '#d4f7ef', transparent: true, opacity: .5 })); world.add(pole);
-    const dot = new THREE.Mesh(new THREE.SphereGeometry(extent * .0023, 10, 8), new THREE.MeshBasicMaterial({ color: item.landmark !== undefined ? '#6ee1db' : '#ffffff' })); dot.position.copy(p); world.add(dot);
+    const dot = new THREE.Mesh(new THREE.SphereGeometry(D.buildingsFile ? .003 : extent * .0023, 10, 8), new THREE.MeshBasicMaterial({ color: item.landmark !== undefined ? '#6ee1db' : '#ffffff' })); dot.position.copy(p); world.add(dot);
     const el = document.createElement('button'); el.className = 'map-label ' + (item.cls || '');
     const b = document.createElement('b'); b.textContent = item.code; el.append(b, document.createTextNode(item.name));
     el.onclick = () => { select(item.index, item.landmark ?? null, true); focus(item.p); };
@@ -244,12 +375,65 @@ async function init3D() {
   }
   createEndpointMarkers();
   let transition = null, viewPreset = 'overview', narrow = innerWidth < 760;
+  let playing = false, flightKm = 0, lastFrame = null, lastProfile = 0;
+  const totalKm = points.at(-1)[3];
+  pauseFlight = () => {
+    playing = false; $('flight-play').textContent = '沿线飞行'; $('flight-play').setAttribute('aria-pressed', 'false');
+  };
+  function flightReadout() {
+    $('flight-progress').value = String(Math.round(flightKm / totalKm * 1000));
+    $('flight-distance').textContent = `${flightKm.toFixed(2)} / ${totalKm.toFixed(2)} km`;
+    if (flightPoint) {
+      $('readout').textContent = `${flightKm.toFixed(2)} km · ${Math.round(flightPoint[2])} m · ${speedReadout(D, selection)}`;
+      drawProfile();
+    }
+  }
+  function flightCamera(snap, dt) {
+    flightPoint = trackSample(points, flightKm); selection = nearest(flightKm);
+    const current = routePosition(flightPoint); current.y *= world.scale.y;
+    const behind = routePosition(trackSample(points, flightKm - .05));
+    const ahead = routePosition(trackSample(points, flightKm + .05));
+    const direction = ahead.sub(behind); direction.y = 0;
+    if (direction.lengthSq() < 1e-12) direction.set(0, 0, -1); else direction.normalize();
+    const desired = current.clone().addScaledVector(direction, -.32); desired.y += .24;
+    const target = routePosition(trackSample(points, flightKm + .20)); target.y *= world.scale.y; target.y += .025;
+    desired.y = Math.max(desired.y, clearance(desired, current));
+    // Check the actual smoothed movement too, rather than only the destination.
+    const next = snap ? desired : camera.position.clone().lerp(desired, 1 - Math.exp(-dt * 5));
+    next.y = Math.max(next.y, clearance(snap ? next : camera.position, next));
+    camera.position.copy(next);
+    if (snap) controls.target.copy(target); else controls.target.lerp(target, 1 - Math.exp(-dt * 5));
+  }
+  function beginFlightView() {
+    transition = null; controls.autoRotate = false; controls.enableDamping = false;
+    $('rotate').setAttribute('aria-pressed', 'false'); setPreset(null);
+    selectedLandmark = null; $('point-card').hidden = true;
+    document.querySelectorAll('#landmark-list button,.map-label.active').forEach(el => el.classList.remove('active'));
+    // Clear any residual OrbitControls inertia before handing over the camera.
+    controls.update();
+  }
+  $('flight-play').disabled = false; $('flight-progress').disabled = false;
+  $('flight-play').onclick = () => {
+    if (playing) { pauseFlight(); return; }
+    const restart = flightKm >= totalKm;
+    if (restart) flightKm = 0;
+    const first = !flightPoint || restart;
+    beginFlightView(); playing = true; lastFrame = null;
+    $('flight-play').textContent = '暂停飞行'; $('flight-play').setAttribute('aria-pressed', 'true');
+    flightCamera(first || reducedMotion, 0); flightReadout();
+  };
+  $('flight-progress').oninput = () => {
+    pauseFlight(); beginFlightView(); flightKm = Number($('flight-progress').value) / 1000 * totalKm;
+    flightCamera(true, 0); flightReadout(); controls.update();
+  };
+  flightReadout();
   function setPreset(value) {
     viewPreset = value; $('overview').setAttribute('aria-pressed', String(value === 'overview')); $('top').setAttribute('aria-pressed', String(value === 'top'));
   }
   const overviewPosition = () => new THREE.Vector3(0, 1.05, 1.5).multiplyScalar(extent * (innerWidth < 760 ? 2.3 : 1));
   const topPosition = () => new THREE.Vector3(0, extent * (innerWidth < 760 ? 3.8 : 2.4), .01);
   function moveCamera(pos, target) {
+    pauseFlight();
     controls.autoRotate = false; $('rotate').setAttribute('aria-pressed', 'false');
     transition = { start: performance.now(), from: camera.position.clone(), to: pos, targetFrom: controls.target.clone(), targetTo: target };
     if (reducedMotion) { camera.position.copy(pos); controls.target.copy(target); transition = null; }
@@ -260,13 +444,13 @@ async function init3D() {
   };
   $('overview').onclick = overview;
   $('top').onclick = () => { setPreset('top'); moveCamera(topPosition(), new THREE.Vector3(0, .2, 0)); };
-  $('rotate').onclick = () => { transition = null; setPreset(null); controls.autoRotate = !controls.autoRotate; $('rotate').setAttribute('aria-pressed', String(controls.autoRotate)); };
+  $('rotate').onclick = () => { pauseFlight(); transition = null; setPreset(null); controls.autoRotate = !controls.autoRotate; $('rotate').setAttribute('aria-pressed', String(controls.autoRotate)); };
   $('ghost').onclick = () => { ghost.visible = !ghost.visible; $('ghost').setAttribute('aria-pressed', String(ghost.visible)); };
   $('texture').onclick = () => { const on = material.map === null; material.map = on ? texture : null; material.color.set(on ? '#ffffff' : '#42605a'); material.needsUpdate = true; $('texture').setAttribute('aria-pressed', String(on)); };
-  function exaggerate() { world.scale.y = Number($('exag').value); $('exag-value').textContent = `${world.scale.y}×`; }
+  function exaggerate() { world.scale.y = Number($('exag').value); $('exag-value').textContent = `${world.scale.y}×`; updateBuildings(); }
   $('exag').oninput = exaggerate; exaggerate();
   focus = p => { setPreset(null); const target = routePosition(p); target.y *= world.scale.y; moveCamera(target.clone().add(new THREE.Vector3(.27, .36, .45).multiplyScalar(extent)), target); };
-  controls.addEventListener('start', () => { transition = null; setPreset(null); });
+  controls.addEventListener('start', () => { pauseFlight(); controls.enableDamping = !reducedMotion; transition = null; setPreset(null); });
   const v = new THREE.Vector3();
   function resize() {
     const w = innerWidth, h = innerHeight; renderer.setSize(w, h, false); camera.aspect = w / h;
@@ -280,14 +464,26 @@ async function init3D() {
   }
   camera.position.copy(overviewPosition()); controls.target.set(0, .2, 0);
   addEventListener('resize', resize); resize();
-  renderer.setAnimationLoop(() => {
+  renderer.setAnimationLoop(now => {
+    const dt = lastFrame === null ? 0 : Math.min(.1, (now - lastFrame) / 1000); lastFrame = now;
+    if (playing) {
+      flightKm = Math.min(totalKm, flightKm + totalKm / 180 * Number($('flight-speed').value) * dt);
+      flightCamera(false, dt);
+      if (now - lastProfile > 100 || flightKm === totalKm) { flightReadout(); lastProfile = now; }
+      if (flightKm === totalKm) pauseFlight();
+    }
     if (transition) {
       const t = Math.min(1, (performance.now() - transition.start) / 700), ease = t * t * (3 - 2 * t);
       camera.position.lerpVectors(transition.from, transition.to, ease); controls.target.lerpVectors(transition.targetFrom, transition.targetTo, ease);
       if (t === 1) transition = null;
     }
-    if (selection !== null) { marker.visible = true; marker.position.copy(routePosition(points[selection])); } else marker.visible = false;
-    controls.update(); renderer.render(scene, camera);
+    if (selection !== null) { marker.visible = true; marker.position.copy(routePosition(flightPoint || points[selection])); marker.scale.setScalar(flightPoint ? Math.min(1, .012 / (extent * .005)) : 1); } else marker.visible = false;
+    controls.update();
+    if (flightPoint) {
+      // Orbit constraints can adjust the pose; keep the final rendered camera clear too.
+      camera.position.y = Math.max(camera.position.y, clearance(camera.position, camera.position)); camera.lookAt(controls.target);
+    }
+    renderer.render(scene, camera);
     renderEndpointMarkers(endpointMarkers.map(item => {
       const p = routePosition(points[item.index]).applyMatrix4(world.matrixWorld).project(camera);
       return { x: (p.x + 1) * innerWidth / 2, y: (1 - p.y) * innerHeight / 2, visible: p.z >= -1 && p.z <= 1 };
@@ -311,8 +507,12 @@ async function init3D() {
     $('north').style.transform = `rotate(${Math.atan2(camera.position.x - controls.target.x, camera.position.z - controls.target.z)}rad)`;
   });
   renderer.domElement.addEventListener('webglcontextlost', e => { e.preventDefault(); $('status').hidden = false; $('status').textContent = '3D 图形上下文已中断，请刷新页面恢复。'; });
+  // Terrain is already rendering and flight is active while optional city data loads.
+  if (D.buildingsFile !== undefined) { $('status').textContent = '正在加载城市建筑…'; $('status').style.top = '80px'; }
+  await loadBuildings();
 }
 async function flatFallback() {
+  pauseFlight(); $('flight-play').disabled = true; $('flight-progress').disabled = true; $('flight-speed').disabled = true;
   // Replace the WebGL canvas: an already-used canvas cannot create a 2D context.
   const old = $('map'), canvas = old.cloneNode(false); old.replaceWith(canvas);
   const c = canvas.getContext('2d'), img = new Image(); img.src = 'data/satellite.jpg'; await img.decode();

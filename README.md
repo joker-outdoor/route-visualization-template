@@ -1,6 +1,6 @@
 # Route Visualization Template
 
-可复用的单线 GPX / KML 路线页面：3D 地形、底图、沿途地标、联动海拔曲线、手机布局和 2D 降级。源自 [龙泉七湖连穿](https://github.com/joker-outdoor/longquan-seven-lakes-2026-10-02)，也可作为 [贡嘎 100](https://github.com/joker-outdoor/gongga100-2026) 风格的起点。
+可复用的单线 GPX / KML 路线页面：3D 地形、可选城市建筑、沿线飞行、底图、沿途地标、联动海拔曲线、手机布局和 2D 降级。源自 [龙泉七湖连穿](https://github.com/joker-outdoor/longquan-seven-lakes-2026-10-02)，也可作为 [贡嘎 100](https://github.com/joker-outdoor/gongga100-2026) 风格的起点。
 
 仓库默认展示**合成路线、合成网格与合成地形**，不代表真实行程。模板代码、生成器与配置示例集中维护在这里，skill 只编排使用流程。
 
@@ -36,6 +36,39 @@ python3 -m http.server 8080 --bind 127.0.0.1
 
 公开 `data/route.json` 可含相对速度与活动汇总，不含逐点绝对时间或未知扩展数组。公开 `data/route.gpx` 只保留轨迹名、坐标和海拔，去掉作者、账号、头像、照片、逐点时间及原扩展。发布前核查生成数据与配置，不提交原始输入。
 
+## 城市建筑与沿线飞行
+
+地图上的「沿线飞行」需点击开始，全程默认约 180 秒，可切换 1 / 2 / 4 倍模拟速度；不表示真实运动速度。相机在路线后方约 320 m、上方约 240 m，前瞻 200 m；附近建筑较高时抬高镜头。按原始轨迹累计坐标距离插值，不用样条截弯；移动点、坐标里程与剖面同步。暂停后可拖动进度定位，终点停止，再点播放从起点重播。操作地图、地标、剖面、全景、俯视或旋转会暂停，需显式恢复。无建筑时飞行仍可用；2D 隐藏飞行。减少动态效果的系统设置不会阻止主动播放。
+
+生成时可增加 `--buildings /path/to/buildings.json`。生成器先校验输入，复制为 `data/buildings.json` 并写入 `route.json` 的 `buildingsFile`；不传参数的旧调用不变。模板 demo 不附带真实建筑数据。既有数据可选 `buildingsFile` 指向 `data/` 内的 JSON，不能越出该目录；未指定时不请求建筑，加载失败也不阻断地形或飞行。
+
+```json
+{
+  "version": 1,
+  "source": {
+    "name": "OpenStreetMap contributors",
+    "url": "https://www.openstreetmap.org/copyright",
+    "license": "ODbL-1.0",
+    "extractedOn": "2026-10-24",
+    "corridorMeters": 500
+  },
+  "heightNote": "OSM 标注高度；楼层按 3 m/层换算，缺省 12 m。",
+  "buildings": [{
+    "id": "way/example",
+    "ring": [[104.0, 30.0], [104.001, 30.0], [104.001, 30.001], [104.0, 30.001]],
+    "heightM": 42,
+    "minHeightM": 12,
+    "heightSource": "osm-levels",
+    "part": true,
+    "name": "示例部件"
+  }]
+}
+```
+
+`ring` 为至少三个不同 WGS84 点的非零面积轮廓，不重复末点；支持凹多边形。`heightM` 是楼顶相对地面的米数，`minHeightM` 是底部离地米数，须满足 `0 <= minHeightM < heightM <= 1000`，实际厚度是两者之差。`heightSource` 可取 `osm-height` / `osm-levels` / `osm-estimate` / `default-estimate`；估值应在准备数据时填入。`part` 是布尔值，可选 `name`、六位十六进制 `color`、`note`。建筑文件须保留来源、许可、提取日期、沿线范围与估高说明，页面在「轨迹与数据说明」中显示。
+
+数据准备时去掉已被部件替代的 parent 包围轮廓；渲染器逐个保留部件和 `minHeightM`，不会把电视塔观景层下方填成整柱。一个合批 mesh 显示浅暖灰 / 蓝灰体块，无外墙纹理。地面取现有 DEM，建筑高度默认夸张 1.5 倍，可调 1–4 倍，与地形高度、GPX 海拔独立；调整地形后建筑仍贴地。建筑文件逐项无效时浏览器跳过该项；生成与数据校验则拒绝不合约的输入。MP4 导出仍沿用原有视频页面，本轮地图建筑与飞行不改视频导出。
+
 ## 验证和发布
 
 ```sh
@@ -46,6 +79,8 @@ python3 scripts/check_data.py
 ```
 
 `--demo` 只生成明确标注的合成地形与底图，用于离线开发和测试；真实行程生成时省略此参数。浏览器检查桌面、手机、地标点击、剖面联动与 `?view=2d`。GitHub Actions 验证数据和脚本；合入后启用 GitHub Pages：main 分支，根目录 `/`。发布后再次检查在线页面。
+
+现有测试入口同时加载 `test_city_flight.mjs`，使用实际 Three.js 几何和 CPU 场景替身检查凹轮廓法线、悬空部件、独立高度、相机移动、暂停、进度、倍速、重播、开关与加载失败。它不验证 WebGL 画面、手机布局或视觉效果；发布前另在真实 Edge 验看城市近景、电视塔部件与窄屏控件。
 
 ## 来源
 

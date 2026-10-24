@@ -1,4 +1,6 @@
 import { test } from 'node:test';
+// Preserve the existing CI entrypoint while covering the map scene too.
+import './test_city_flight.mjs';
 import assert from 'node:assert/strict';
 import * as THREE from '../vendor/three.module.js';
 import { palette, speedPalette, speedAt, valueRange, pointColor, formatPace, formatDuration, speedReadout, lengthSample, tubeColorValues, segmentColors, lineColorValues, endpointTitle, routeEndpoints } from '../route-style.js';
