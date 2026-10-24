@@ -21,6 +21,28 @@ class RouteTests(unittest.TestCase):
         self.assertIsNone(d['stats']['gainM']);self.assertEqual(d['stats']['durationHours'],2/60)
         self.assertEqual(d['recordedOn'],'2025-12-31');self.assertEqual(d['stats']['minM'],-20)
         self.assertNotIn(b'PRIVATE',(Path(self.tmp.name)/'data/route.gpx').read_bytes());check(Path(self.tmp.name)/'data')
+    def test_kilometer_config_roundtrip_preserves_geometry_stats_and_gpx(self):
+        import json
+        self.write();before=parse_track(self.p,self.config)
+        out=Path(self.tmp.name)/'data';build(self.p,self.config,out,True);gpx=(out/'route.gpx').read_bytes()
+        self.assertNotIn('kilometerMarkers',before)
+        config={'distanceKm':42.195,'positionSource':'按官方全程42.195 km比例定位'}
+        self.config['kilometerMarkers']=config
+        after=build(self.p,self.config,out,True)
+        self.assertEqual(after['kilometerMarkers'],config)
+        self.assertEqual(after['points'],before['points']);self.assertEqual(after['stats'],before['stats'])
+        self.assertEqual((out/'route.gpx').read_bytes(),gpx);check(out)
+        for bad in [None,[],{}, {'distanceKm':True,'positionSource':'x'}, {'distanceKm':'42.195','positionSource':'x'},
+                    {'distanceKm':float('nan'),'positionSource':'x'}, {'distanceKm':float('inf'),'positionSource':'x'},
+                    {'distanceKm':0,'positionSource':'x'}, {'distanceKm':-1,'positionSource':'x'},
+                    {'distanceKm':1001,'positionSource':'x'}, {'distanceKm':42.195,'positionSource':' '},
+                    {'distanceKm':42.195,'positionSource':True}]:
+            with self.subTest(config=bad):
+                self.config['kilometerMarkers']=bad
+                with self.assertRaises(ValueError): parse_track(self.p,self.config)
+                broken=dict(after,kilometerMarkers=bad);(out/'route.json').write_text(json.dumps(broken))
+                with self.assertRaises(ValueError): check(out)
+
     def test_gpx10_and_explicit_landmark(self):
         self.write(namespace='http://www.topografix.com/GPX/1/0');self.config['landmarks']=[{'name':'入口','lon':104.001,'lat':30.001,'positionSource':'用户坐标'}]
         self.assertEqual(parse_track(self.p,self.config)['landmarks'][0]['index'],1)

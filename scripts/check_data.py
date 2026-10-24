@@ -4,6 +4,16 @@ from pathlib import Path
 
 HEIGHT_SOURCES = {'osm-height', 'osm-levels', 'osm-estimate', 'default-estimate'}
 
+def validate_kilometer_markers(data):
+    """Optional official-distance display; never changes track geometry or statistics."""
+    if not isinstance(data, dict): raise ValueError('Invalid kilometerMarkers')
+    distance = data.get('distanceKm')
+    if type(distance) not in (int, float) or not math.isfinite(distance) or distance <= 0 or math.floor(distance) > 1000:
+        raise ValueError('kilometerMarkers.distanceKm must be finite, positive and define at most 1000 markers')
+    source = data.get('positionSource')
+    if not isinstance(source, str) or not source.strip(): raise ValueError('kilometerMarkers.positionSource is required')
+    return {'distanceKm': distance, 'positionSource': source}
+
 def validate_buildings(data):
     """Shared input/output contract; fail before the generator replaces any files."""
     def require(ok, message):
@@ -101,6 +111,7 @@ def check(directory):
     assert t['w']>=2 and t['h']>=2 and len(t['elevations'])==t['w']*t['h']
     assert all(math.isfinite(e) for e in t['elevations'])
     assert all(type(m['index']) is int and 0<=m['index']<len(p) and m['positionSource'] for m in d['landmarks'])
+    if 'kilometerMarkers' in d: validate_kilometer_markers(d['kilometerMarkers'])
     if 'buildingsFile' in d:
         validate_buildings(json.loads(buildings_path(directory, d['buildingsFile']).read_text()))
     if 'imageryDetailFile' in d:

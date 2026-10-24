@@ -7,7 +7,7 @@ import * as style from '../route-style.js';
 
 const source = await readFile(new URL('../app.js', import.meta.url), 'utf8');
 const pure = source.slice(source.indexOf('function trackSample('), source.indexOf('\nfunction nearest('));
-const functions = vm.runInNewContext(pure + '\n({trackSample,cityGeometry})', {THREE});
+const functions = vm.runInNewContext(pure + '\n({trackSample,cityGeometry,kilometerConfig,kilometerDefinitions})', {THREE});
 const footprint = (overrides = {}) => ({id:'test',ring:[[0,0],[2,0],[2,1],[1,1],[1,2],[0,2]],heightM:100,minHeightM:20,heightSource:'osm-height',part:true,...overrides});
 const project = (x,z) => new THREE.Vector3(x,.5,z);
 
@@ -43,7 +43,7 @@ test('concave roof area, outward normals and suspended bottom stay correct in on
 
 // Exercise the actual app handlers, geometry and camera with a CPU renderer/DOM stub.
 // This verifies scene state, not WebGL output, browser layout or visual acceptance.
-export async function sceneFixture({buildingsFile='buildings.json',badFetch=false,viewport=[1200,900],towerAhead=0,towerSide=0,flat=false,routeData,terrainData,cityData,detailManifest,imageryDetailFile}={}) {
+export async function sceneFixture({buildingsFile='buildings.json',badFetch=false,viewport=[1200,900],towerAhead=0,towerSide=0,flat=false,routeData,terrainData,cityData,detailManifest,imageryDetailFile,reduced=false}={}) {
   const elements=new Map();
   let [width,height]=viewport;
   const events=new Map();
@@ -55,8 +55,8 @@ export async function sceneFixture({buildingsFile='buildings.json',badFetch=fals
   }
   function element(id){
     if(!elements.has(id))elements.set(id,{id,value:({exag:'3','building-exag':'1.5','flight-progress':'0','flight-speed':'1'})[id]||'',hidden:false,disabled:false,
-      textContent:'',style:{setProperty(){}},children:[],attrs:new Map(),classList:{remove(){},toggle(){}},
-      append(...items){this.children.push(...items);},setAttribute(k,v){this.attrs.set(k,v);},getAttribute(k){return this.attrs.get(k);},
+      offsetWidth:48,offsetHeight:22,textContent:'',style:{setProperty(){}},children:[],attrs:new Map(),classList:{remove(){},toggle(){}},
+      remove(){this.removed=true;},append(...items){this.children.push(...items);},setAttribute(k,v){this.attrs.set(k,v);},getAttribute(k){return this.attrs.get(k);},
       addEventListener(){},cloneNode(){return this;},replaceWith(){},getContext(){return new Proxy({},{get:()=>()=>{}});},getBoundingClientRect(){return rect(id);}});
     return elements.get(id);
   }
@@ -87,7 +87,7 @@ export async function sceneFixture({buildingsFile='buildings.json',badFetch=fals
   const terrain=structuredClone(terrainData||JSON.parse(await readFile(new URL('../data/terrain.json',import.meta.url),'utf8')));
   if(flat)terrain.elevations.fill(500);
   const context=vm.createContext({...style,THREE:{...THREE,WebGLRenderer:Renderer,TextureLoader:class{async loadAsync(){return new THREE.Texture({width:1024,height:1024});}}},OrbitControls:Controls,
-    document:{getElementById:element,createElement:()=>element(Symbol()),createTextNode:text=>({textContent:text}),querySelector:element,querySelectorAll:()=>[]},matchMedia:()=>({matches:false}),
+    document:{getElementById:element,createElement:()=>element(Symbol()),createTextNode:text=>({textContent:text}),querySelector:element,querySelectorAll:selector=>selector==='.kilometer'?Array.from(elements.values()).filter(e=>e.className==='map-label kilometer'&&!e.removed):[]},matchMedia:()=>({matches:reduced}),
     innerWidth:width,innerHeight:height,devicePixelRatio:1,performance:{now:()=>0},addEventListener(name,fn){events.set(name,fn);},console:{...console,warn(){}},URL,encodeURIComponent,
     Image:class{constructor(){this.width=1200;this.height=1200;}async decode(){}},
     AbortSignal,location:{href:'http://localhost/'},fetch:async url=>{fetches++;if(badFetch)throw new Error('fixture failure');return {ok:true,json:async()=>url==='data/imagery-detail.json'?detailManifest:buildings};}});
@@ -96,7 +96,7 @@ export async function sceneFixture({buildingsFile='buildings.json',badFetch=fals
   context.route=route;context.terrain=terrain;
   vm.runInContext('D=route;T=terrain;points=D.points;pointColors=points.map(()=>"#aabbcc");drawProfile=()=>{};',context);
   await vm.runInContext('init3D()',context);await new Promise(r=>setImmediate(r));tick(0);
-  return {element,step:tick,rect,get scene(){return scene;},get camera(){return camera;},get controls(){return controls;},get fetches(){return fetches;},point:()=>vm.runInContext('flightPoint',context),flat:()=>vm.runInContext('flatFallback()',context),
+  return {element,allElements:()=>Array.from(elements.values()).filter(e=>!e.removed),display:km=>vm.runInContext(`distanceText(${km})`,context),step:tick,rect,get scene(){return scene;},get camera(){return camera;},get controls(){return controls;},get fetches(){return fetches;},point:()=>vm.runInContext('flightPoint',context),flat:()=>vm.runInContext('flatFallback()',context),
     resize(w,h){width=w;height=h;context.innerWidth=w;context.innerHeight=h;events.get('resize')();}};
 }
 
@@ -191,4 +191,78 @@ test('forward and close side towers fit with the route inside the uncovered desk
     }
     e('overview').onclick();assert.equal(f.camera.fov,38);e('top').onclick();assert.equal(f.camera.fov,38);
   }
+});
+
+function cornerRoute(base, xy) {
+  const d=structuredClone(base);delete d.buildingsFile;delete d.imageryDetailFile;
+  d.widthKm=4;d.heightKm=4;d.landmarks=[];let km=0;
+  d.points=xy.map(([u,v],i)=>{
+    if(i)km+=Math.hypot(u-xy[i-1][0],v-xy[i-1][1])*4;
+    const [x0,y0,x1,y1]=d.bounds.mercator,x=x0+u*(x1-x0),y=y0+v*(y1-y0);
+    return [x*360-180,Math.atan(Math.sinh(Math.PI*(1-2*y)))*180/Math.PI,500,km,u,v];
+  });d.stats.distanceKm=km;return d;
+}
+
+test('actual rendered pose stays below 25 deg/s through independent right angles, hairpins and zero directions at every speed',async()=>{
+  const base=JSON.parse(await readFile(new URL('../data/route.json',import.meta.url),'utf8'));
+  for(const xy of [[[.2,.4],[.7,.4],[.7,.8]],[[.2,.4],[.7,.4],[.7,.4],[.2,.4]]]){
+    for(const speed of ['1','2','4']){
+      const route=cornerRoute(base,xy),f=await sceneFixture({buildingsFile:null,routeData:route,flat:true,reduced:speed==='4'}),e=f.element;
+      e('flight-progress').value='300';e('flight-progress').oninput();e('flight-speed').value=speed;e('flight-play').onclick();
+      let previous=f.camera.quaternion.clone(),previousKm=0,maxRate=0;
+      for(let i=1;i<=5400;i++){
+        f.step(i*1000/60);const q=f.camera.quaternion;
+        maxRate=Math.max(maxRate,previous.angleTo(q)*60*180/Math.PI);previous.copy(q);
+        assert(f.point()[3]>=previousKm);previousKm=f.point()[3];assert(f.camera.position.toArray().every(Number.isFinite));
+        if(i===300){
+          e('flight-play').onclick();const paused=f.camera.quaternion.clone();f.step(i*1000/60+2);
+          assert(paused.angleTo(f.camera.quaternion)<1e-7);e('flight-play').onclick();
+          assert(paused.angleTo(f.camera.quaternion)<1e-7,'resume must not snap');
+        }
+      }
+      assert(maxRate<25.01,`${speed}x: ${maxRate} deg/s`);assert(previousKm>2.4,`must pass the corner: ${previousKm}`);
+      f.controls.listeners.start();f.step(90200);assert.equal(e('flight-play').getAttribute('aria-pressed'),'false');
+    }
+  }
+});
+
+test('resuming after manual takeover starts at the actual displayed position and direction',async()=>{
+  const f=await sceneFixture({buildingsFile:null}),e=f.element;
+  e('flight-progress').value='400';e('flight-progress').oninput();e('flight-play').onclick();f.step(100);f.step(200);
+  f.controls.listeners.start();f.camera.position.add(new THREE.Vector3(.2,.2,-.1));f.controls.update();
+  const position=f.camera.position.clone(),quaternion=f.camera.quaternion.clone();
+  e('flight-play').onclick();assert(f.camera.position.distanceTo(position)<1e-9);assert(quaternion.angleTo(f.camera.quaternion)<1e-7);
+  f.step(300);assert(f.camera.position.distanceTo(position)<1e-9);assert(quaternion.angleTo(f.camera.quaternion)<1e-7);
+  f.step(400);assert(quaternion.angleTo(f.camera.quaternion)*180/Math.PI<=2.5);
+});
+
+test('kilometer roots, geometry mapping, endpoint readouts, overlap priority and 2D keep the same distance contract',async()=>{
+  const base=JSON.parse(await readFile(new URL('../data/route.json',import.meta.url),'utf8'));
+  const route=cornerRoute(base,[[.2,.4],[.7,.4],[.2,.4]]);
+  route.kilometerMarkers={distanceKm:42.195,positionSource:'按官方全程42.195 km比例定位'};
+  const f=await sceneFixture({buildingsFile:null,routeData:route,flat:true}),e=f.element;
+  const roots=()=>f.allElements().filter(el=>el.getAttribute('data-km')!=null);
+  assert.equal(roots().length,42);
+  for(const el of roots()){
+    const k=Number(el.getAttribute('data-km')),g=Number(el.getAttribute('data-geometry-km'));
+    assert(Math.abs(g-k*route.points.at(-1)[3]/42.195)<1e-10);
+    assert.equal(el.textContent,`${k} km`);assert.match(el.getAttribute('aria-label'),/公里/);
+  }
+  assert.equal(f.display(0),'0.00');assert.equal(f.display(route.points.at(-1)[3]),'42.195');
+  e('flight-progress').value='1000';e('flight-progress').oninput();assert.equal(e('flight-distance').textContent,'42.195 / 42.195 km');
+  e('flight-progress').value='720';e('flight-progress').oninput();f.step(100);
+  // In the overlapping return half, the outbound marker at the same location is not a candidate.
+  assert(roots().some(el=>!el.hidden),'return-leg signs must stay visible');
+  assert(roots().filter(el=>!el.hidden).every(el=>Number(el.getAttribute('data-km'))>=30));
+  await f.flat();assert.equal(roots().length,42);assert.equal(e('flight-play').disabled,true);
+  const old=await sceneFixture({buildingsFile:null});assert.equal(old.allElements().filter(el=>el.getAttribute('data-km')!=null).length,0);
+  assert.equal(old.display(1.25),'1.25');
+  for(const bad of [null,{},true,{distanceKm:true,positionSource:'x'},{distanceKm:'42.195',positionSource:'x'},
+    {distanceKm:NaN,positionSource:'x'},{distanceKm:Infinity,positionSource:'x'},{distanceKm:0,positionSource:'x'},
+    {distanceKm:1001,positionSource:'x'},{distanceKm:42.195,positionSource:' '}]){
+    const data={...route,kilometerMarkers:bad};assert.equal(functions.kilometerConfig(data),null);assert.equal(functions.kilometerDefinitions(data).length,0);
+  }
+  const invalid=await sceneFixture({buildingsFile:null,routeData:{...route,kilometerMarkers:{distanceKm:true,positionSource:'x'}},flat:true});
+  assert.equal(invalid.allElements().filter(el=>el.getAttribute('data-km')!=null).length,0);assert.equal(invalid.display(1.25),'1.25');
+  assert.equal(invalid.element('flight-play').disabled,false);
 });
