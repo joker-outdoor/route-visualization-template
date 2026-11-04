@@ -43,25 +43,43 @@ test('concave roof area, outward normals and suspended bottom stay correct in on
 
 // Exercise the actual app handlers, geometry and camera with a CPU renderer/DOM stub.
 // This verifies scene state, not WebGL output, browser layout or visual acceptance.
-export async function sceneFixture({buildingsFile='buildings.json',badFetch=false,viewport=[1200,900],towerAhead=0,towerSide=0,flat=false,routeData,terrainData,cityData,detailManifest,imageryDetailFile,reduced=false,start='3d',imageFailure=false,beforeInit}={}) {
+export async function sceneFixture({buildingsFile='buildings.json',badFetch=false,viewport=[1200,900],towerAhead=0,towerSide=0,flat=false,routeData,terrainData,cityData,detailManifest,imageryDetailFile,reduced=false,start='3d',imageFailure=false,beforeInit,rects={}}={}) {
   const elements=new Map();
   const canvasCalls=[],hiddenRectReads=[];
   let [width,height]=viewport;
   const events=new Map();
   function rect(id){
-    const mobile=width<760;
+    const mobile=width<=760;
     if(elements.get('app')?.classList.contains('maximized')){
       if(['header','side','profile','point-card'].includes(id)){hiddenRectReads.push(id);return {left:0,top:0,right:0,bottom:0,width:0,height:0};}
       if(id==='tools')return {left:12,top:height-(width<=600?142:88),right:width-12,bottom:height-32,width:width-24,height:width<=600?110:56};
     }
+    if(elements.get(id)?.hidden)return {left:0,top:0,right:0,bottom:0,width:0,height:0};
     if(id==='footer')return {left:12,top:height-20,right:width-12,bottom:height-8,width:width-24,height:12};
-    const bounds=id==='header'?[12,20,width-12,mobile?90:110]:id==='side'?(mobile?[12,height-411,width-12,height-207]:[24,128,302,height-270]):
-      id==='tools'?(mobile?[12,height-509,width-12,height-419]:[width-272,22,width-22,280]):id==='profile'?[12,height-(mobile?197:245),width-12,height-32]:[0,0,width,height];
+    // Only ordinary 2D uses the compact CSS layout; retain the 3D/maximized model.
+    const flat=elements.get('app')?.classList.contains('flat-view'),short=height<=650;
+    const flatBounds=flat?(mobile?{
+      header:[12,12,width-12,78],side:[12,height-228,width-12,height-116],
+      tools:[12,height-286,width-12,height-236],profile:[12,height-108,width-12,height-24],
+      'point-card':[12,height-228,width-12,height-116],
+      // Match the short landscape bottom strip in .flat-view:not(.maximized).
+      ...(short&&width>height?{
+        side:[12,height-104,12+width*.32,height-24],profile:[width*.32+20,height-104,width-132,height-24],
+        tools:[width-124,height-74,width-12,height-24],'point-card':[12,height-104,12+width*.32,height-24]
+      }:{})
+    }:{
+      ...(short?{header:[12,12,width-136,80],side:[12,96,192,height-132],profile:[12,height-120,width-12,height-24]}:{}),
+      tools:[width-(short?124:134),short?12:22,width-(short?12:22),short?70:80],
+      'point-card':[width-(short?192:204),height-(short?257:390),width-(short?12:24),height-(short?132:260)]
+    }):{};
+    const bounds=rects[id]??flatBounds[id]??(id==='header'?[12,20,width-12,mobile?90:110]:id==='side'?(mobile?[12,height-411,width-12,height-207]:[24,128,302,height-270]):
+      id==='tools'?(mobile?[12,height-509,width-12,height-419]:[width-272,22,width-22,280]):id==='profile'?[12,height-(mobile?197:245),width-12,height-32]:
+      id==='point-card'?(mobile?[width-222,height-520,width-12,height-420]:[width-344,height-340,width-24,height-260]):[0,0,width,height]);
     const [left,top,right,bottom]=bounds;return {left,top,right,bottom,width:right-left,height:bottom-top};
   }
   function element(id){
     const classes=new Set();
-    if(!elements.has(id))elements.set(id,{id,value:({exag:'3','building-exag':'1.5','flight-progress':'0','flight-speed':'1'})[id]||'',hidden:false,disabled:false,
+    if(!elements.has(id))elements.set(id,{id,value:({exag:'3','building-exag':'1.5','flight-progress':'0','flight-speed':'1'})[id]||'',hidden:id==='point-card',disabled:false,
       offsetWidth:48,offsetHeight:22,textContent:id==='maximize-view'?'最大化3D':'',style:{setProperty(){}},children:[],attrs:new Map(id==='maximize-view'?[['aria-pressed','false']]:[]),classList:{remove(c){classes.delete(c);},contains(c){return classes.has(c);},toggle(c,force){const on=force??!classes.has(c);if(on)classes.add(c);else classes.delete(c);return on;}},
       remove(){this.removed=true;},append(...items){this.children.push(...items);},setAttribute(k,v){this.attrs.set(k,v);},getAttribute(k){return this.attrs.get(k);},
       addEventListener(){},cloneNode(){return this;},replaceWith(){},getContext(){return new Proxy({},{get:(_,method)=>(...args)=>{canvasCalls.push({method,args});}});},getBoundingClientRect(){return rect(id);}});
@@ -234,6 +252,81 @@ test('2D maximize redraws without panel offsets or painted text and restores wit
     e('maximize-view').onclick();f.resize(viewport[1],viewport[0]);assert.notDeepEqual(image(),original);
     assert.equal(e('tools').hidden,false);
   }
+});
+
+test('normal 2D image avoids measured controls and panels on mobile and desktop after redraw and restore',async()=>{
+  for(const viewport of [[667,375],[736,414],[375,667],[320,568],[844,390],[390,844],[1440,900],[759,900],[760,900],[761,900]]){
+    const rects={},f=await sceneFixture({start:'2d',viewport,buildingsFile:null,rects}),e=f.element;
+    const image=()=>{const draw=f.canvasCalls.findLast(call=>call.method==='drawImage');assert(draw,'expected a fresh 2D draw');return draw.args;};
+    const check=(minSize=160,size=viewport)=>{
+      const [img,x,y,w,h]=image();
+      assert([x,y,w,h].every(Number.isFinite));assert(Math.min(w,h)>=minSize,`2D image too small at ${size}: ${w}×${h}`);
+      assert(Math.abs(w/h-img.width/img.height)<1e-10);
+      assert(x>=0&&y>=0&&x+w<=size[0]&&y+h<=size[1]);
+      for(const id of ['header','tools','side','profile','point-card']){
+        if(e(id).hidden)continue;
+        const r=f.rect(id);if(!r.width||!r.height)continue;
+        assert(x+w<=r.left||x>=r.right||y+h<=r.top||y>=r.bottom,`2D image intersects ${id} at ${size}`);
+      }
+      assert.equal(e('tools').hidden,false);assert.equal(typeof e('maximize-view').onclick,'function');
+      for(const id of ['flight-play','flight-progress','flight-speed'])assert.equal(e(id).disabled,true);
+    };
+    check();const original=image().slice(1);
+    const t=f.rect('tools');
+    rects.tools=viewport[0]<=760?[t.left,original[1]+original[3]/2,t.right,t.bottom]:[original[0]+original[2]/2,t.top,t.right,t.bottom];
+    f.canvasCalls.length=0;f.resize(...viewport);check(1);assert.notDeepEqual(image().slice(1),original);
+    delete rects.tools;f.canvasCalls.length=0;f.resize(...viewport);check();
+    // Selecting an endpoint opens the actual detail card and redraws the map.
+    f.canvasCalls.length=0;
+    f.allElements().find(el=>el.className==='endpoint-marker endpoint-start').onclick();check();
+    assert.equal(e('point-card').hidden,false);
+    if(viewport[0]>760)assert.notDeepEqual(image().slice(1),original);
+    const withCard=image().slice(1);e('maximize-view').onclick();f.canvasCalls.length=0;e('maximize-view').onclick();check();
+    assert.deepEqual(image().slice(1),withCard);
+    f.canvasCalls.length=0;e('close-card').onclick();check();
+    assert.deepEqual(image().slice(1),original,'closing the card must immediately restore the original framing');
+    rects.tools=[0,0,0,0];f.canvasCalls.length=0;f.resize(...viewport);check();
+    delete rects.tools;
+    // Resize through both CSS layouts and restore the exact original framing.
+    f.canvasCalls.length=0;f.resize(844,390);check(160,[844,390]);
+    f.canvasCalls.length=0;f.resize(320,568);check(160,[320,568]);
+    f.canvasCalls.length=0;f.resize(667,375);check(160,[667,375]);
+    f.canvasCalls.length=0;f.resize(736,414);check(160,[736,414]);
+    f.canvasCalls.length=0;f.resize(...viewport);check();assert.deepEqual(image().slice(1),original);
+  }
+});
+
+test('normal 2D follows the inclusive CSS mobile breakpoint on initial draw, resize and restore',async()=>{
+  for(const width of [759,760,761]){
+    const f=await sceneFixture({start:'2d',viewport:[width,900],buildingsFile:null});
+    assert(f.canvasCalls.some(call=>call.method==='drawImage'),`initial 2D draw at ${width}px`);
+    f.canvasCalls.length=0;f.resize(width,900);
+    const draw=f.canvasCalls.findLast(call=>call.method==='drawImage');
+    assert(draw,`normal 2D must draw at ${width}px`);
+    const [,x,y,w,h]=draw.args;
+    assert(w>0&&h>0&&x>=0&&y>=0&&x+w<=width&&y+h<=900);
+    for(const id of ['header','side','tools','profile']){
+      const r=f.rect(id);
+      assert(x+w<=r.left||x>=r.right||y+h<=r.top||y>=r.bottom,`${width}px image intersects ${id}`);
+    }
+    f.element('maximize-view').onclick();f.canvasCalls.length=0;f.element('maximize-view').onclick();
+    assert.deepEqual(f.canvasCalls.findLast(call=>call.method==='drawImage')?.args.slice(1),draw.args.slice(1));
+  }
+});
+
+test('2D skips drawing when panels leave no space and redraws on resize or closing the card',async()=>{
+  const rects={},f=await sceneFixture({start:'2d',viewport:[390,844],buildingsFile:null,rects});
+  rects.tools=[12,80,378,425];f.canvasCalls.length=0;f.resize(390,844);
+  assert(!f.canvasCalls.some(call=>call.method==='drawImage'));
+  assert(f.allElements().filter(el=>el.className?.startsWith('endpoint-marker')).every(el=>el.hidden));
+  delete rects.tools;f.resize(390,844);
+  assert(f.canvasCalls.some(call=>call.method==='drawImage'));
+  assert(f.allElements().some(el=>el.className?.startsWith('endpoint-marker')&&!el.hidden));
+  rects['point-card']=[168,80,378,424];f.canvasCalls.length=0;
+  f.allElements().find(el=>el.className==='endpoint-marker endpoint-start').onclick();
+  assert(!f.canvasCalls.some(call=>call.method==='drawImage'));
+  f.element('close-card').onclick();
+  assert(f.canvasCalls.some(call=>call.method==='drawImage'),'closing the card must recover an empty map without resize');
 });
 
 test('restore is bound before initialization and survives data and fallback image failures',async()=>{

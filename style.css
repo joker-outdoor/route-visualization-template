@@ -42,6 +42,48 @@ input:focus-visible,select:focus-visible{outline:2px solid var(--aqua);outline-o
 /* One toolbar and one set of flight controls in both layouts. */
 #maximize-view{min-height:44px;min-width:100px;color:var(--green)}
 .flat-view #tools > :not(#view-toggle):not(#flight-controls){display:none}
+/* The fallback needs room for the map; information remains scrollable. */
+.flat-view:not(.maximized) #flight-controls{display:none}
+.flat-view:not(.maximized) #tools{max-height:none;overflow:visible}
+.flat-view:not(.maximized) #point-card{width:180px;max-width:180px}
+.flat-view:not(.maximized) #point-name{line-height:1.4;max-height:2.8em;overflow:auto}
+.flat-view:not(.maximized) #point-detail{max-height:80px;overflow:auto}
+@media(max-width:760px){
+  .flat-view:not(.maximized) header{left:12px;top:12px;right:12px}
+  .flat-view:not(.maximized) h1{font-size:22px;line-height:1.2;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+  .flat-view:not(.maximized) .eyebrow{font-size:7px;margin-bottom:4px}
+  .flat-view:not(.maximized) .subtitle{font-size:9px;margin:4px 0}
+  .flat-view:not(.maximized) #profile{bottom:24px;height:84px;padding:8px}
+  .flat-view:not(.maximized) #side{bottom:116px;height:112px;max-height:none;display:block;overflow:auto;padding:8px 10px}
+  .flat-view:not(.maximized) .big-distance{margin:6px 0}
+  .flat-view:not(.maximized) #color-controls{margin:8px 0}
+  .flat-view:not(.maximized) #landmark-list{margin:8px 0}
+  .flat-view:not(.maximized) #side details{display:block}
+  .flat-view:not(.maximized) #side details[open]{position:static;padding:0}
+  .flat-view:not(.maximized) .download{position:static;margin-top:8px;padding:6px}
+  .flat-view:not(.maximized) #tools{bottom:236px}
+  .flat-view:not(.maximized) #point-card{left:12px;right:12px;bottom:116px;width:auto;max-width:none;height:112px;padding:10px 34px 10px 12px}
+  .flat-view:not(.maximized) #point-detail{max-height:50px}
+}
+@media(min-width:761px) and (max-height:650px){
+  .flat-view:not(.maximized) header{left:12px;top:12px;right:136px}
+  .flat-view:not(.maximized) h1{font-size:22px;line-height:1.2;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+  .flat-view:not(.maximized) .eyebrow{font-size:8px;margin-bottom:4px}
+  .flat-view:not(.maximized) .subtitle{font-size:10px;margin:4px 0}
+  .flat-view:not(.maximized) #side{left:12px;top:96px;bottom:132px;width:180px;max-height:none;padding:10px}
+  .flat-view:not(.maximized) #profile{left:12px;right:12px;bottom:24px;height:96px;padding:8px}
+  .flat-view:not(.maximized) #tools{top:12px;right:12px}
+  .flat-view:not(.maximized) #point-card{right:12px;bottom:132px;padding:10px 30px 10px 10px}
+}
+/* On short phones, share a bottom strip instead of stacking three panels. */
+@media(max-width:760px) and (max-height:650px) and (orientation:landscape){
+  .flat-view:not(.maximized) #side{left:12px;right:auto;bottom:24px;width:32%;height:80px}
+  .flat-view:not(.maximized) #profile{left:calc(32% + 20px);right:132px;bottom:24px;height:80px}
+  .flat-view:not(.maximized) #tools{left:auto;right:12px;bottom:24px;width:112px}
+  .flat-view:not(.maximized) #point-card{left:12px;right:auto;bottom:24px;width:32%;height:80px;padding:8px 30px 8px 8px}
+  .flat-view:not(.maximized) #point-name{max-height:1.4em;white-space:nowrap}
+  .flat-view:not(.maximized) #point-detail{max-height:34px}
+}
 #app.maximized{--panel:#101b24;--ink:#e8efed}
 .maximized header,.maximized #side,.maximized #profile,.maximized #point-card,.maximized .map-label{display:none}
 #app.maximized #tools{top:auto;bottom:calc(32px + env(safe-area-inset-bottom,0px));left:calc(12px + env(safe-area-inset-left,0px));right:calc(12px + env(safe-area-inset-right,0px));width:auto;max-width:900px;margin:0 auto;max-height:none;overflow:visible;flex-direction:row;flex-wrap:nowrap;align-items:center;gap:8px;z-index:5}

@@ -291,7 +291,7 @@ chart.addEventListener('keydown', e => {
   e.preventDefault(); const delta = e.key === 'ArrowLeft' ? -10 : 10;
   select(e.key === 'Home' ? 0 : e.key === 'End' ? points.length - 1 : Math.max(0, Math.min(points.length - 1, (selection ?? 0) + delta)));
 });
-$('close-card').onclick = () => { $('point-card').hidden = true; };
+$('close-card').onclick = () => { $('point-card').hidden = true; renderMap(); };
 
 function createEndpointMarkers() {
   if (endpointMarkers[0]?.el.isConnected) return;
@@ -829,14 +829,29 @@ async function flatFallback() {
   renderMap = () => {
     const dpr = Math.min(devicePixelRatio, 2); canvas.width = innerWidth * dpr; canvas.height = innerHeight * dpr; c.setTransform(dpr, 0, 0, dpr, 0, 0);
     c.fillStyle = '#0a1218'; c.fillRect(0, 0, innerWidth, innerHeight);
-    const mobile = innerWidth < 760;
-    const area = maximized ? maximizedMapRect() : null;
-    const availableHeight = area ? area.bottom - area.top : mobile ? $('side').getBoundingClientRect().top - 115 : innerHeight - 250;
-    const availableWidth = area ? area.right - area.left : innerWidth - (mobile ? 24 : 310);
-    const scale = Math.min(availableWidth / img.width, Math.max(50, availableHeight) / img.height);
+    const mobile = innerWidth <= 760;
+    const area = maximized ? maximizedMapRect() : {left:12, right:innerWidth - 12, top:12, bottom:innerHeight - 12};
+    if (!maximized) {
+      const header = document.querySelector('header').getBoundingClientRect();
+      if (header.width > 0 && header.height > 0) area.top = Math.max(area.top, header.bottom + 12);
+      for (const id of ['side', 'tools', 'profile', 'point-card']) {
+        if ($(id).hidden) continue;
+        const r = $(id).getBoundingClientRect();
+        if (r.width <= 0 || r.height <= 0) continue;
+        // Mobile panels sit below the map; desktop panels bound its left and right.
+        if (mobile || id === 'profile') area.bottom = Math.min(area.bottom, r.top - 12);
+        else if (id === 'side') area.left = Math.max(area.left, r.right + 12);
+        else area.right = Math.min(area.right, r.left - 12);
+      }
+    }
+    const availableHeight = area.bottom - area.top, availableWidth = area.right - area.left;
+    if (availableWidth <= 0 || availableHeight <= 0) {
+      [...endpointMarkers, ...kilometerLabels].forEach(item => { item.el.hidden = true; });
+      return;
+    }
+    const scale = Math.min(availableWidth / img.width, availableHeight / img.height);
     const w = img.width * scale, h = img.height * scale;
-    const x0 = area ? area.left + (availableWidth - w) / 2 : mobile ? (innerWidth - w) / 2 : 310 + (innerWidth - 310 - w) / 2;
-    const y0 = area ? area.top + (availableHeight - h) / 2 : mobile ? 100 : 10;
+    const x0 = area.left + (availableWidth - w) / 2, y0 = area.top + (availableHeight - h) / 2;
     c.drawImage(img, x0, y0, w, h); strokeRoute(c, p => [x0 + p[4] * w, y0 + p[5] * h], 2);
     D.landmarks.forEach((landmark, i) => { const p = points[landmark.index], x = x0 + p[4] * w, y = y0 + p[5] * h; c.fillStyle = '#6ee1db'; c.beginPath(); c.arc(x, y, 4, 0, 7); c.fill(); if (!maximized) { c.font = '11px system-ui'; c.fillText(`${i + 1} ${landmark.name.split('（')[0]}`, x + 7, y); } });
     placeKilometers(kilometerLabels, item => ({x:x0+item.p[4]*w, y:y0+item.p[5]*h}));
