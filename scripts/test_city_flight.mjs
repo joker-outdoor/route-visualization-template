@@ -43,7 +43,7 @@ test('concave roof area, outward normals and suspended bottom stay correct in on
 
 // Exercise the actual app handlers, geometry and camera with a CPU renderer/DOM stub.
 // This verifies scene state, not WebGL output, browser layout or visual acceptance.
-export async function sceneFixture({buildingsFile='buildings.json',badFetch=false,viewport=[1200,900],towerAhead=0,towerSide=0,flat=false,routeData,terrainData,cityData,detailManifest,imageryDetailFile,reduced=false,start='3d',imageFailure=false,beforeInit}={}) {
+export async function sceneFixture({buildingsFile='buildings.json',badFetch=false,viewport=[1200,900],towerAhead=0,towerSide=0,flat=false,routeData,terrainData,cityData,detailManifest,imageryDetailFile,reduced=false,start='3d',imageFailure=false,beforeInit,rects={}}={}) {
   const elements=new Map();
   const canvasCalls=[],hiddenRectReads=[];
   let [width,height]=viewport;
@@ -54,14 +54,16 @@ export async function sceneFixture({buildingsFile='buildings.json',badFetch=fals
       if(['header','side','profile','point-card'].includes(id)){hiddenRectReads.push(id);return {left:0,top:0,right:0,bottom:0,width:0,height:0};}
       if(id==='tools')return {left:12,top:height-(width<=600?142:88),right:width-12,bottom:height-32,width:width-24,height:width<=600?110:56};
     }
+    if(elements.get(id)?.hidden)return {left:0,top:0,right:0,bottom:0,width:0,height:0};
     if(id==='footer')return {left:12,top:height-20,right:width-12,bottom:height-8,width:width-24,height:12};
-    const bounds=id==='header'?[12,20,width-12,mobile?90:110]:id==='side'?(mobile?[12,height-411,width-12,height-207]:[24,128,302,height-270]):
-      id==='tools'?(mobile?[12,height-509,width-12,height-419]:[width-272,22,width-22,280]):id==='profile'?[12,height-(mobile?197:245),width-12,height-32]:[0,0,width,height];
+    const bounds=rects[id]??(id==='header'?[12,20,width-12,mobile?90:110]:id==='side'?(mobile?[12,height-411,width-12,height-207]:[24,128,302,height-270]):
+      id==='tools'?(mobile?[12,height-509,width-12,height-419]:[width-272,22,width-22,280]):id==='profile'?[12,height-(mobile?197:245),width-12,height-32]:
+      id==='point-card'?(mobile?[width-222,height-520,width-12,height-420]:[width-344,height-340,width-24,height-260]):[0,0,width,height]);
     const [left,top,right,bottom]=bounds;return {left,top,right,bottom,width:right-left,height:bottom-top};
   }
   function element(id){
     const classes=new Set();
-    if(!elements.has(id))elements.set(id,{id,value:({exag:'3','building-exag':'1.5','flight-progress':'0','flight-speed':'1'})[id]||'',hidden:false,disabled:false,
+    if(!elements.has(id))elements.set(id,{id,value:({exag:'3','building-exag':'1.5','flight-progress':'0','flight-speed':'1'})[id]||'',hidden:id==='point-card',disabled:false,
       offsetWidth:48,offsetHeight:22,textContent:id==='maximize-view'?'最大化3D':'',style:{setProperty(){}},children:[],attrs:new Map(id==='maximize-view'?[['aria-pressed','false']]:[]),classList:{remove(c){classes.delete(c);},contains(c){return classes.has(c);},toggle(c,force){const on=force??!classes.has(c);if(on)classes.add(c);else classes.delete(c);return on;}},
       remove(){this.removed=true;},append(...items){this.children.push(...items);},setAttribute(k,v){this.attrs.set(k,v);},getAttribute(k){return this.attrs.get(k);},
       addEventListener(){},cloneNode(){return this;},replaceWith(){},getContext(){return new Proxy({},{get:(_,method)=>(...args)=>{canvasCalls.push({method,args});}});},getBoundingClientRect(){return rect(id);}});
@@ -234,6 +236,49 @@ test('2D maximize redraws without panel offsets or painted text and restores wit
     e('maximize-view').onclick();f.resize(viewport[1],viewport[0]);assert.notDeepEqual(image(),original);
     assert.equal(e('tools').hidden,false);
   }
+});
+
+test('normal 2D image avoids measured controls and panels on mobile and desktop after redraw and restore',async()=>{
+  for(const viewport of [[390,844],[1440,900]]){
+    const rects={},f=await sceneFixture({start:'2d',viewport,buildingsFile:null,rects}),e=f.element;
+    const image=()=>f.canvasCalls.filter(call=>call.method==='drawImage').at(-1).args;
+    const check=()=>{
+      const [img,x,y,w,h]=image();
+      assert([x,y,w,h].every(Number.isFinite));assert(w>0&&h>0);
+      assert(Math.abs(w/h-img.width/img.height)<1e-10);
+      assert(x>=0&&y>=0&&x+w<=viewport[0]&&y+h<=viewport[1]);
+      for(const id of ['header','tools','side','profile','point-card']){
+        if(e(id).hidden)continue;
+        const r=f.rect(id);if(!r.width||!r.height)continue;
+        assert(x+w<=r.left||x>=r.right||y+h<=r.top||y>=r.bottom,`2D image intersects ${id} at ${viewport}`);
+      }
+      assert.equal(e('tools').hidden,false);assert.equal(typeof e('maximize-view').onclick,'function');
+      for(const id of ['flight-play','flight-progress','flight-speed'])assert.equal(e(id).disabled,true);
+    };
+    check();const original=image().slice(1);
+    const t=f.rect('tools');
+    rects.tools=viewport[0]<760?[t.left,t.top-40,t.right,t.bottom]:[t.left-100,t.top,t.right,t.bottom];
+    f.resize(...viewport);check();assert.notDeepEqual(image().slice(1),original);
+    delete rects.tools;f.resize(...viewport);
+    // Selecting an endpoint opens the actual detail card and redraws the map.
+    f.allElements().find(el=>el.className==='endpoint-marker endpoint-start').onclick();check();
+    assert.equal(e('point-card').hidden,false);
+    assert.notDeepEqual(image().slice(1),original);
+    const withCard=image().slice(1);e('maximize-view').onclick();e('maximize-view').onclick();check();
+    assert.deepEqual(image().slice(1),withCard);
+    e('close-card').onclick();rects.tools=[0,0,0,0];f.canvasCalls.length=0;f.resize(...viewport);check();
+    assert.notDeepEqual(image().slice(1),withCard,'hidden cards and zero-area tools must not reserve space');
+  }
+});
+
+test('2D skips drawing when panels leave no space and redraws when space returns',async()=>{
+  const rects={},f=await sceneFixture({start:'2d',viewport:[390,844],buildingsFile:null,rects});
+  rects.tools=[12,80,378,425];f.canvasCalls.length=0;f.resize(390,844);
+  assert(!f.canvasCalls.some(call=>call.method==='drawImage'));
+  assert(f.allElements().filter(el=>el.className?.startsWith('endpoint-marker')).every(el=>el.hidden));
+  delete rects.tools;f.resize(390,844);
+  assert(f.canvasCalls.some(call=>call.method==='drawImage'));
+  assert(f.allElements().some(el=>el.className?.startsWith('endpoint-marker')&&!el.hidden));
 });
 
 test('restore is bound before initialization and survives data and fallback image failures',async()=>{
