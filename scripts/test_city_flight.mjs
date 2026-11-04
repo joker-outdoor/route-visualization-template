@@ -43,21 +43,28 @@ test('concave roof area, outward normals and suspended bottom stay correct in on
 
 // Exercise the actual app handlers, geometry and camera with a CPU renderer/DOM stub.
 // This verifies scene state, not WebGL output, browser layout or visual acceptance.
-export async function sceneFixture({buildingsFile='buildings.json',badFetch=false,viewport=[1200,900],towerAhead=0,towerSide=0,flat=false,routeData,terrainData,cityData,detailManifest,imageryDetailFile,reduced=false}={}) {
+export async function sceneFixture({buildingsFile='buildings.json',badFetch=false,viewport=[1200,900],towerAhead=0,towerSide=0,flat=false,routeData,terrainData,cityData,detailManifest,imageryDetailFile,reduced=false,start='3d',imageFailure=false,beforeInit}={}) {
   const elements=new Map();
+  const canvasCalls=[],hiddenRectReads=[];
   let [width,height]=viewport;
   const events=new Map();
   function rect(id){
     const mobile=width<760;
+    if(elements.get('app')?.classList.contains('maximized')){
+      if(['header','side','profile','point-card'].includes(id)){hiddenRectReads.push(id);return {left:0,top:0,right:0,bottom:0,width:0,height:0};}
+      if(id==='tools')return {left:12,top:height-(width<=600?142:88),right:width-12,bottom:height-32,width:width-24,height:width<=600?110:56};
+    }
+    if(id==='footer')return {left:12,top:height-20,right:width-12,bottom:height-8,width:width-24,height:12};
     const bounds=id==='header'?[12,20,width-12,mobile?90:110]:id==='side'?(mobile?[12,height-411,width-12,height-207]:[24,128,302,height-270]):
       id==='tools'?(mobile?[12,height-509,width-12,height-419]:[width-272,22,width-22,280]):id==='profile'?[12,height-(mobile?197:245),width-12,height-32]:[0,0,width,height];
     const [left,top,right,bottom]=bounds;return {left,top,right,bottom,width:right-left,height:bottom-top};
   }
   function element(id){
+    const classes=new Set();
     if(!elements.has(id))elements.set(id,{id,value:({exag:'3','building-exag':'1.5','flight-progress':'0','flight-speed':'1'})[id]||'',hidden:false,disabled:false,
-      offsetWidth:48,offsetHeight:22,textContent:'',style:{setProperty(){}},children:[],attrs:new Map(),classList:{remove(){},toggle(){}},
+      offsetWidth:48,offsetHeight:22,textContent:id==='maximize-view'?'最大化3D':'',style:{setProperty(){}},children:[],attrs:new Map(id==='maximize-view'?[['aria-pressed','false']]:[]),classList:{remove(c){classes.delete(c);},contains(c){return classes.has(c);},toggle(c,force){const on=force??!classes.has(c);if(on)classes.add(c);else classes.delete(c);return on;}},
       remove(){this.removed=true;},append(...items){this.children.push(...items);},setAttribute(k,v){this.attrs.set(k,v);},getAttribute(k){return this.attrs.get(k);},
-      addEventListener(){},cloneNode(){return this;},replaceWith(){},getContext(){return new Proxy({},{get:()=>()=>{}});},getBoundingClientRect(){return rect(id);}});
+      addEventListener(){},cloneNode(){return this;},replaceWith(){},getContext(){return new Proxy({},{get:(_,method)=>(...args)=>{canvasCalls.push({method,args});}});},getBoundingClientRect(){return rect(id);}});
     return elements.get(id);
   }
   let tick,scene,camera,controls,fetches=0;
@@ -88,15 +95,18 @@ export async function sceneFixture({buildingsFile='buildings.json',badFetch=fals
   if(flat)terrain.elevations.fill(500);
   const context=vm.createContext({...style,THREE:{...THREE,WebGLRenderer:Renderer,TextureLoader:class{async loadAsync(){return new THREE.Texture({width:1024,height:1024});}}},OrbitControls:Controls,
     document:{getElementById:element,createElement:()=>element(Symbol()),createTextNode:text=>({textContent:text}),querySelector:element,querySelectorAll:selector=>selector==='.kilometer'?Array.from(elements.values()).filter(e=>e.className==='map-label kilometer'&&!e.removed):[]},matchMedia:()=>({matches:reduced}),
-    innerWidth:width,innerHeight:height,devicePixelRatio:1,performance:{now:()=>0},addEventListener(name,fn){events.set(name,fn);},console:{...console,warn(){}},URL,encodeURIComponent,
-    Image:class{constructor(){this.width=1200;this.height=1200;}async decode(){}},
+    innerWidth:width,innerHeight:height,devicePixelRatio:1,performance:{now:()=>0},addEventListener(name,fn){events.set(name,fn);},console:{...console,warn(){},error(){}},URL,encodeURIComponent,
+    Image:class{constructor(){this.width=1200;this.height=1200;}async decode(){if(imageFailure)throw new Error('fixture image failure');}},
     AbortSignal,location:{href:'http://localhost/'},fetch:async url=>{fetches++;if(badFetch)throw new Error('fixture failure');return {ok:true,json:async()=>url==='data/imagery-detail.json'?detailManifest:buildings};}});
   const body=source.replace(/^import .*;\n/gm,'').slice(0,source.replace(/^import .*;\n/gm,'').lastIndexOf('\nmain().catch'));
   vm.runInContext(body,context);
+  beforeInit?.(element);
   context.route=route;context.terrain=terrain;
   vm.runInContext('D=route;T=terrain;points=D.points;pointColors=points.map(()=>"#aabbcc");drawProfile=()=>{};',context);
-  await vm.runInContext('init3D()',context);await new Promise(r=>setImmediate(r));tick(0);
-  return {element,allElements:()=>Array.from(elements.values()).filter(e=>!e.removed),display:km=>vm.runInContext(`distanceText(${km})`,context),step:tick,rect,get scene(){return scene;},get camera(){return camera;},get controls(){return controls;},get fetches(){return fetches;},point:()=>vm.runInContext('flightPoint',context),flat:()=>vm.runInContext('flatFallback()',context),
+  if(start==='failure')await vm.runInContext(source.slice(source.lastIndexOf('\nmain().catch')),context);
+  else if(start==='2d')await vm.runInContext('flatFallback()',context);
+  else {await vm.runInContext('init3D()',context);await new Promise(r=>setImmediate(r));tick(0);}
+  return {element,canvasCalls,hiddenRectReads,allElements:()=>Array.from(elements.values()).filter(e=>!e.removed),display:km=>vm.runInContext(`distanceText(${km})`,context),step:tick,rect,get scene(){return scene;},get camera(){return camera;},get controls(){return controls;},get fetches(){return fetches;},point:()=>vm.runInContext('flightPoint',context),flat:()=>vm.runInContext('flatFallback()',context),
     resize(w,h){width=w;height=h;context.innerWidth=w;context.innerHeight=h;events.get('resize')();}};
 }
 
@@ -157,9 +167,83 @@ test('no building filename makes no request; load failure preserves terrain and 
 
 test('2D fallback keeps the map path and disables flight controls',async()=>{
   const f=await sceneFixture({buildingsFile:null});await f.flat();
-  assert.equal(f.element('tools').hidden,true);
+  assert.equal(f.element('tools').hidden,false); // Keep the restore button reachable in 2D.
+  assert.equal(f.element('app').classList.contains('flat-view'),true);
   for(const id of ['flight-play','flight-progress','flight-speed'])assert.equal(f.element(id).disabled,true);
   assert.equal(f.fetches,0);
+});
+
+test('maximize onclick restores the projection and reuses paused flight nodes and state',async()=>{
+  const html=await readFile(new URL('../index.html',import.meta.url),'utf8');
+  assert.equal((html.match(/id="maximize-view"/g)||[]).length,1);
+  for(const viewport of [[1200,900],[390,844],[844,390]]){
+    const f=await sceneFixture({viewport}),e=f.element,button=e('maximize-view');
+    const ids=['flight-play','flight-progress','flight-speed','flight-distance'],nodes=ids.map(e);
+    assert.equal(button.getAttribute('aria-pressed'),'false');assert.equal(button.textContent,'最大化3D');
+    const overview=f.camera.projectionMatrix.clone();button.onclick();
+    assert.equal(button.textContent,'恢复面板');assert.equal(button.getAttribute('aria-pressed'),'true');
+    assert.equal(e('app').classList.contains('maximized'),true);
+    assert.equal(f.camera.view.offsetX,0);assert.equal(f.camera.view.offsetY,0);
+    button.onclick();assert.deepEqual(f.camera.projectionMatrix,overview);
+    e('flight-progress').value='500';e('flight-progress').oninput();e('flight-speed').value='4';f.step(100);
+    const lens=f.camera.projectionMatrix.clone(),pose=f.camera.position.clone(),rotation=f.camera.quaternion.clone(),point=Array.from(f.point());
+    button.onclick();f.step(200);f.step(500);
+    assert.deepEqual(Array.from(f.point()),point);assert.deepEqual(f.camera.position,pose);assert(rotation.angleTo(f.camera.quaternion)<1e-7);
+    assert.equal(e('flight-speed').value,'4');assert.equal(e('flight-play').getAttribute('aria-pressed'),'false');
+    assert.notDeepEqual(f.camera.projectionMatrix,lens);assert.deepEqual(f.hiddenRectReads,[]);
+    button.onclick();assert.deepEqual(f.camera.projectionMatrix,lens);assert.deepEqual(ids.map(e),nodes);
+  }
+});
+
+test('maximized flight continues at the selected speed and reframes on resize without hidden panels',async()=>{
+  const f=await sceneFixture({viewport:[390,844],buildingsFile:null}),e=f.element;
+  e('flight-progress').value='300';e('flight-progress').oninput();e('flight-speed').value='2';e('flight-play').onclick();
+  f.step(100);f.step(200);const point=Array.from(f.point()),pose=f.camera.position.clone();
+  e('maximize-view').onclick();assert.deepEqual(Array.from(f.point()),point);assert.deepEqual(f.camera.position,pose);
+  f.step(300);assert(f.point()[3]>point[3]);assert.equal(e('flight-play').getAttribute('aria-pressed'),'true');
+  const oldLens=f.camera.projectionMatrix.clone();f.resize(844,390);assert.notDeepEqual(f.camera.projectionMatrix,oldLens);
+  f.step(400);const km=f.point()[3];e('maximize-view').onclick();f.step(500);
+  assert(f.point()[3]>km);assert.equal(e('flight-speed').value,'2');assert.deepEqual(f.hiddenRectReads,[]);
+});
+
+test('maximized framing fits towers and route above the visible bottom controls',async()=>{
+  for(const viewport of [[1280,900],[390,844],[844,390]]){
+    const f=await sceneFixture({viewport,towerAhead:1.1,flat:true}),e=f.element;
+    e('maximize-view').onclick();e('building-exag').value='4';e('building-exag').oninput();
+    e('flight-progress').value='500';e('flight-progress').oninput();f.step(100);
+    const box=new THREE.Box3().setFromBufferAttribute(f.scene.getObjectByName('city-buildings').geometry.attributes.position);
+    const [w,h]=viewport,bottom=Math.min(f.rect('tools').top,f.rect('footer').top)-12;
+    const inside=point=>{const p=point.clone().project(f.camera),x=(p.x+1)*w/2,y=(1-p.y)*h/2;assert(p.z>-1&&p.z<1);assert(x>12&&x<w-12);assert(y>12&&y<bottom,`y=${y} vs ${bottom}`);};
+    for(const x of [box.min.x,box.max.x])for(const z of [box.min.z,box.max.z])for(const y of [box.min.y,box.max.y])inside(new THREE.Vector3(x,y,z));
+    const marker=f.scene.getObjectByName('route-marker');inside(marker.getWorldPosition(new THREE.Vector3()));
+    assert.deepEqual(f.hiddenRectReads,[]);
+    assert(f.allElements().filter(el=>el.className?.startsWith('map-label')).every(el=>el.hidden));
+  }
+});
+
+test('2D maximize redraws without panel offsets or painted text and restores without enabling flight',async()=>{
+  for(const viewport of [[1200,900],[390,844],[844,390]]){
+    const f=await sceneFixture({start:'2d',viewport,buildingsFile:null}),e=f.element;
+    const image=()=>f.canvasCalls.filter(call=>call.method==='drawImage').at(-1).args.slice(1);
+    const original=image();assert(f.canvasCalls.some(call=>call.method==='fillText'));
+    f.canvasCalls.length=0;e('maximize-view').onclick();
+    const [x,y,w,h]=image();assert.equal(x+w/2,viewport[0]/2);assert(y>=12);assert(y+h<=f.rect('tools').top-12);
+    assert(!f.canvasCalls.some(call=>call.method==='fillText'));assert.deepEqual(f.hiddenRectReads,[]);
+    for(const id of ['flight-play','flight-progress','flight-speed'])assert.equal(e(id).disabled,true);
+    e('maximize-view').onclick();assert.deepEqual(image(),original);assert(f.canvasCalls.some(call=>call.method==='fillText'));
+    e('maximize-view').onclick();f.resize(viewport[1],viewport[0]);assert.notDeepEqual(image(),original);
+    assert.equal(e('tools').hidden,false);
+  }
+});
+
+test('restore is bound before initialization and survives data and fallback image failures',async()=>{
+  const f=await sceneFixture({start:'failure',badFetch:true,beforeInit:e=>e('maximize-view').onclick()}),e=f.element;
+  assert.match(e('status').textContent,/加载失败/);assert.equal(e('maximize-view').getAttribute('aria-pressed'),'true');
+  e('maximize-view').onclick();assert.equal(e('app').classList.contains('maximized'),false);
+  const image=await sceneFixture({imageFailure:true});image.element('maximize-view').onclick();
+  await assert.rejects(image.flat(),/fixture image failure/);
+  image.element('maximize-view').onclick();assert.equal(image.element('maximize-view').textContent,'最大化3D');
+  assert.equal(image.element('app').classList.contains('maximized'),false);
 });
 
 test('pause and manual controls release the camera; a seek and the endpoint do not keep applying clearance',async()=>{

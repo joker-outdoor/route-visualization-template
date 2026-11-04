@@ -38,3 +38,22 @@ input:focus-visible,select:focus-visible{outline:2px solid var(--aqua);outline-o
 .kilometer::after{content:"";position:absolute;left:50%;top:100%;height:9px;width:1px;background:var(--aqua)}
 .kilometer::before{content:"";position:absolute;left:calc(50% - 2px);top:calc(100% + 7px);width:4px;height:4px;border-radius:50%;background:var(--aqua)}
 @media(max-width:760px){.map-label.kilometer{font-size:10px;padding:2px 5px}}
+
+/* One toolbar and one set of flight controls in both layouts. */
+#maximize-view{min-height:44px;min-width:100px;color:var(--green)}
+.flat-view #tools > :not(#view-toggle):not(#flight-controls){display:none}
+#app.maximized{--panel:#101b24;--ink:#e8efed}
+.maximized header,.maximized #side,.maximized #profile,.maximized #point-card,.maximized .map-label{display:none}
+#app.maximized #tools{top:auto;bottom:calc(32px + env(safe-area-inset-bottom,0px));left:calc(12px + env(safe-area-inset-left,0px));right:calc(12px + env(safe-area-inset-right,0px));width:auto;max-width:900px;margin:0 auto;max-height:none;overflow:visible;flex-direction:row;flex-wrap:nowrap;align-items:center;gap:8px;z-index:5}
+.maximized #tools > :not(#view-toggle):not(#flight-controls){display:none}
+.maximized #view-toggle{order:2;flex:none;padding:3px}
+.maximized #maximize-view{color:var(--green);white-space:nowrap}
+.maximized #flight-controls{display:grid;grid-template-columns:auto minmax(100px,1fr) auto;align-items:center;gap:4px;flex:1;min-width:0;width:auto;padding:4px 8px}
+.maximized #flight-controls .tool-row{float:none;gap:4px}
+.maximized #flight-controls button,.maximized #flight-controls select{min-width:44px;min-height:44px;font-size:12px}
+.maximized #flight-controls label{font-size:10px}
+.maximized .flight-seek{padding:0 4px}
+.maximized #flight-progress{height:44px;margin:0}
+.maximized #flight-distance{padding:0 4px;font-size:10px;white-space:nowrap}
+.maximized footer{bottom:calc(8px + env(safe-area-inset-bottom,0px));left:calc(12px + env(safe-area-inset-left,0px));right:calc(12px + env(safe-area-inset-right,0px));font-size:8px;line-height:12px}
+@media(max-width:600px){.maximized #flight-controls{grid-template-columns:minmax(0,1fr) auto;padding:4px}.maximized #flight-controls .tool-row{grid-column:1 / -1}.maximized #flight-controls .tool-row label{padding:0 3px}.maximized #flight-play{padding:6px}.maximized #flight-distance{font-size:8px}.maximized .flight-seek{gap:3px;font-size:8px}.maximized #view-toggle{padding:2px}.maximized #maximize-view{min-width:88px;font-size:11px}}

@@ -10,6 +10,20 @@ const chart = $('chart'), ctx = chart.getContext('2d');
 const markerLabels = [];
 let endpointMarkers = [];
 let pauseFlight = () => {}, flightPoint = null;
+let maximized = false, refreshView = () => {};
+$('maximize-view').onclick = () => {
+  maximized = !maximized;
+  $('app').classList.toggle('maximized', maximized);
+  $('maximize-view').textContent = maximized ? '恢复面板' : '最大化3D';
+  $('maximize-view').setAttribute('aria-pressed', String(maximized));
+  refreshView();
+};
+
+function maximizedMapRect() {
+  // Only visible controls reserve space; hidden panels have zero layout bounds.
+  return {left:12, right:innerWidth - 12, top:12,
+    bottom:Math.max(112, Math.min($('tools').getBoundingClientRect().top, document.querySelector('footer').getBoundingClientRect().top) - 12)};
+}
 
 function localDataUrl(filename) {
   if (typeof filename !== 'string' || /[\\?#:]/.test(filename) || !filename.split('/').every(p => p && p !== '.' && p !== '..')) throw new Error('Invalid data filename');
@@ -184,6 +198,7 @@ function kilometerElement(item) {
 // Keep each anchor on the route; hide crowded labels rather than moving their location.
 function placeKilometers(items, project, close = false) {
   if (!items.length) return [];
+  if (maximized) { items.forEach(item => { item.el.hidden = true; }); return []; }
   const current = displayKm(flightPoint?.[3] ?? (selection === null ? 0 : points[selection][3]));
   const nearby = item => item.km >= Math.floor(current) && item.km <= Math.floor(current) + 2;
   const priority = item => item.km === Math.floor(current) ? -1 : Math.abs(item.km - current) + (item.km < current ? 2 : 0);
@@ -559,16 +574,20 @@ async function init3D() {
     const w = innerWidth, h = innerHeight, mobile = w < 760;
     camera.aspect = w / h;
     if (flightView) {
-      const side = $('side').getBoundingClientRect(), tools = $('tools').getBoundingClientRect();
-      const top = document.querySelector('header').getBoundingClientRect().bottom + 12;
-      const left = mobile ? 12 : Math.min(w * .45, side.right + 16), right = mobile ? w - 12 : Math.max(left + 180, tools.left - 12);
-      const bottom = Math.max(top + 100, Math.min($('profile').getBoundingClientRect().top, mobile ? Math.min(side.top, tools.top) : h) - 12);
-      flightRect = { left, right, top, bottom };
+      if (maximized) flightRect = maximizedMapRect();
+      else {
+        const side = $('side').getBoundingClientRect(), tools = $('tools').getBoundingClientRect();
+        const top = document.querySelector('header').getBoundingClientRect().bottom + 12;
+        const left = mobile ? 12 : Math.min(w * .45, side.right + 16), right = mobile ? w - 12 : Math.max(left + 180, tools.left - 12);
+        const bottom = Math.max(top + 100, Math.min($('profile').getBoundingClientRect().top, mobile ? Math.min(side.top, tools.top) : h) - 12);
+        flightRect = { left, right, top, bottom };
+      }
+      const {left, right, top, bottom} = flightRect;
       // A 60-degree lens across the unobscured map, rather than the full portrait canvas.
       camera.fov = THREE.MathUtils.radToDeg(2 * Math.atan(Math.tan(Math.PI / 6) * h / (bottom - top)));
       camera.setViewOffset(w, h, w / 2 - (left + right) / 2, h / 2 - (top + bottom) / 2, w, h);
     } else {
-      camera.fov = 38; camera.setViewOffset(w, h, mobile ? 0 : -100, mobile ? 190 : 80, w, h);
+      camera.fov = 38; camera.setViewOffset(w, h, maximized || mobile ? 0 : -100, maximized ? 0 : mobile ? 190 : 80, w, h);
     }
     camera.updateProjectionMatrix();
   }
@@ -730,6 +749,7 @@ async function init3D() {
     narrow = nowNarrow; drawProfile();
   }
   camera.position.copy(overviewPosition()); controls.target.set(0, .2, 0);
+  refreshView = resize;
   addEventListener('resize', resize); resize();
   renderer.setAnimationLoop(now => {
     const dt = lastFrame === null ? 0 : Math.min(.1, (now - lastFrame) / 1000); lastFrame = now;
@@ -770,6 +790,7 @@ async function init3D() {
       return {x:(p.x+1)*innerWidth/2, y:(1-p.y)*innerHeight/2, visible:p.z >= -1 && p.z <= 1};
     }, flightView || camera.position.distanceTo(controls.target) < 2.5).map(b => ({x:(b.left+b.right)/2, y:(b.top+b.bottom)/2, w:b.right-b.left, h:b.bottom-b.top}));
     for (const item of markerLabels) {
+      if (maximized) { item.el.hidden = true; continue; }
       v.copy(item.top).applyMatrix4(world.matrixWorld).project(camera);
       if (v.z < -1 || v.z > 1 || Math.abs(v.x) > 1.2 || Math.abs(v.y) > 1.2) { item.el.hidden = true; continue; }
       item.el.hidden = false; let x = (v.x + 1) * innerWidth / 2, y = (1 - v.y) * innerHeight / 2;
@@ -794,10 +815,12 @@ async function init3D() {
 }
 async function flatFallback() {
   pauseFlight(); $('flight-play').disabled = true; $('flight-progress').disabled = true; $('flight-speed').disabled = true;
+  $('app').classList.toggle('flat-view', true);
+  refreshView = () => {};
   // Replace the WebGL canvas: an already-used canvas cannot create a 2D context.
   const old = $('map'), canvas = old.cloneNode(false); old.replaceWith(canvas);
   const c = canvas.getContext('2d'), img = new Image(); img.src = 'data/satellite.jpg'; await img.decode();
-  $('tools').hidden = true; recolorRoute = () => {}; focus = () => {};
+  recolorRoute = () => {}; focus = () => {};
   createEndpointMarkers();
   // Clear 3D roots before creating the fallback signs.
   document.querySelectorAll('.kilometer').forEach(el => el.remove());
@@ -807,16 +830,21 @@ async function flatFallback() {
     const dpr = Math.min(devicePixelRatio, 2); canvas.width = innerWidth * dpr; canvas.height = innerHeight * dpr; c.setTransform(dpr, 0, 0, dpr, 0, 0);
     c.fillStyle = '#0a1218'; c.fillRect(0, 0, innerWidth, innerHeight);
     const mobile = innerWidth < 760;
-    const availableHeight = mobile ? $('side').getBoundingClientRect().top - 115 : innerHeight - 250;
-    const scale = Math.min((innerWidth - (mobile ? 24 : 310)) / img.width, Math.max(50, availableHeight) / img.height);
-    const w = img.width * scale, h = img.height * scale, x0 = innerWidth < 760 ? (innerWidth - w) / 2 : 310 + (innerWidth - 310 - w) / 2, y0 = mobile ? 100 : 10;
+    const area = maximized ? maximizedMapRect() : null;
+    const availableHeight = area ? area.bottom - area.top : mobile ? $('side').getBoundingClientRect().top - 115 : innerHeight - 250;
+    const availableWidth = area ? area.right - area.left : innerWidth - (mobile ? 24 : 310);
+    const scale = Math.min(availableWidth / img.width, Math.max(50, availableHeight) / img.height);
+    const w = img.width * scale, h = img.height * scale;
+    const x0 = area ? area.left + (availableWidth - w) / 2 : mobile ? (innerWidth - w) / 2 : 310 + (innerWidth - 310 - w) / 2;
+    const y0 = area ? area.top + (availableHeight - h) / 2 : mobile ? 100 : 10;
     c.drawImage(img, x0, y0, w, h); strokeRoute(c, p => [x0 + p[4] * w, y0 + p[5] * h], 2);
-    D.landmarks.forEach((landmark, i) => { const p = points[landmark.index], x = x0 + p[4] * w, y = y0 + p[5] * h; c.fillStyle = '#6ee1db'; c.beginPath(); c.arc(x, y, 4, 0, 7); c.fill(); c.font = '11px system-ui'; c.fillText(`${i + 1} ${landmark.name.split('（')[0]}`, x + 7, y); });
+    D.landmarks.forEach((landmark, i) => { const p = points[landmark.index], x = x0 + p[4] * w, y = y0 + p[5] * h; c.fillStyle = '#6ee1db'; c.beginPath(); c.arc(x, y, 4, 0, 7); c.fill(); if (!maximized) { c.font = '11px system-ui'; c.fillText(`${i + 1} ${landmark.name.split('（')[0]}`, x + 7, y); } });
     placeKilometers(kilometerLabels, item => ({x:x0+item.p[4]*w, y:y0+item.p[5]*h}));
     if (selection !== null) { const p = points[selection]; c.fillStyle = '#fff'; c.beginPath(); c.arc(x0 + p[4] * w, y0 + p[5] * h, 5, 0, 7); c.fill(); }
     renderEndpointMarkers(endpointMarkers.map(item => ({ x: x0 + points[item.index][4] * w, y: y0 + points[item.index][5] * h })));
   };
-  addEventListener('resize', () => { renderMap(); drawProfile(); }); renderMap();
+  refreshView = () => { renderMap(); drawProfile(); };
+  addEventListener('resize', refreshView); renderMap();
 }
 async function main() {
   const responses = await Promise.all(['data/route.json', 'data/terrain.json'].map(async url => { const r = await fetch(url); if (!r.ok) throw new Error(`数据加载失败：${r.status}`); return r.json(); }));
