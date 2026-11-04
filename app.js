@@ -504,7 +504,7 @@ async function init3D() {
   const routeLine = new THREE.LineSegments(routeGeo, new THREE.LineBasicMaterial({ vertexColors: true, depthTest: true })); world.add(routeLine);
   const curve = new THREE.CurvePath();
   for (let i = 1; i < vertices.length; i++) if (vertices[i].distanceToSquared(vertices[i - 1]) > 0) curve.add(new THREE.LineCurve3(vertices[i - 1], vertices[i]));
-  const tube = new THREE.Mesh(new THREE.TubeGeometry(curve, Math.min(points.length * 2, 20000), D.buildingsFile ? .003 : extent * .0012, 5, false), new THREE.MeshBasicMaterial({ vertexColors: true })); world.add(tube);
+  const tube = new THREE.Mesh(new THREE.TubeGeometry(curve, Math.min(points.length * 2, 20000), D.buildingsFile ? .003 : Math.min(extent * .0012, .003), 5, false), new THREE.MeshBasicMaterial({ vertexColors: true })); world.add(tube);
   const ghost = new THREE.LineSegments(routeGeo, new THREE.LineBasicMaterial({ vertexColors: true, opacity: .25, transparent: true, depthTest: false, depthWrite: false })); ghost.renderOrder = 3; world.add(ghost);
   const lengths = [0];
   for (let i = 1; i < vertices.length; i++) lengths.push(lengths[i-1] + vertices[i].distanceTo(vertices[i-1]));

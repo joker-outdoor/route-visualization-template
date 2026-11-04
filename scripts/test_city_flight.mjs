@@ -134,6 +134,20 @@ test('app handlers move the camera, freeze pause, seek, replay, toggle mesh and 
   e('flight-play').onclick();assert.equal(e('flight-progress').value,'0');assert.equal(e('flight-play').getAttribute('aria-pressed'),'true');
 });
 
+test('actual route tubes cap long-course radius, retain short-course width and keep city width fixed',async()=>{
+  const base=JSON.parse(await readFile(new URL('../data/route.json',import.meta.url),'utf8'));
+  for(const [widthKm,heightKm,radius] of [[1,2,.0024],[35.38262469325277,32.609090996068886,.003]]){
+    for(const buildingsFile of [null,'buildings.json']){
+      const f=await sceneFixture({buildingsFile,routeData:{...base,widthKm,heightKm}});
+      const world=f.scene.children.find(o=>o.isGroup);
+      const tube=world.children.find(o=>o.geometry?.type==='TubeGeometry');
+      assert(tube,'actual app route tube');
+      assert.equal(tube.geometry.parameters.radius,buildingsFile ? .003 : radius);
+      assert.equal(tube.geometry.attributes.color.count,tube.geometry.attributes.position.count);
+    }
+  }
+});
+
 test('no building filename makes no request; load failure preserves terrain and flight',async()=>{
   const missing=await sceneFixture({buildingsFile:null});assert.equal(missing.fetches,0);assert.equal(missing.element('flight-play').disabled,false);
   const failed=await sceneFixture({badFetch:true});assert.equal(failed.element('flight-play').disabled,false);
