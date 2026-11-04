@@ -61,7 +61,12 @@ export async function sceneFixture({buildingsFile='buildings.json',badFetch=fals
     const flatBounds=flat?(mobile?{
       header:[12,12,width-12,78],side:[12,height-228,width-12,height-116],
       tools:[12,height-286,width-12,height-236],profile:[12,height-108,width-12,height-24],
-      'point-card':[12,height-228,width-12,height-116]
+      'point-card':[12,height-228,width-12,height-116],
+      // Match the short landscape bottom strip in .flat-view:not(.maximized).
+      ...(short&&width>height?{
+        side:[12,height-104,12+width*.32,height-24],profile:[width*.32+20,height-104,width-132,height-24],
+        tools:[width-124,height-74,width-12,height-24],'point-card':[12,height-104,12+width*.32,height-24]
+      }:{})
     }:{
       ...(short?{header:[12,12,width-136,80],side:[12,96,192,height-132],profile:[12,height-120,width-12,height-24]}:{}),
       tools:[width-(short?124:134),short?12:22,width-(short?12:22),short?70:80],
@@ -250,7 +255,7 @@ test('2D maximize redraws without panel offsets or painted text and restores wit
 });
 
 test('normal 2D image avoids measured controls and panels on mobile and desktop after redraw and restore',async()=>{
-  for(const viewport of [[375,667],[320,568],[844,390],[390,844],[1440,900],[759,900],[760,900],[761,900]]){
+  for(const viewport of [[667,375],[736,414],[375,667],[320,568],[844,390],[390,844],[1440,900],[759,900],[760,900],[761,900]]){
     const rects={},f=await sceneFixture({start:'2d',viewport,buildingsFile:null,rects}),e=f.element;
     const image=()=>{const draw=f.canvasCalls.findLast(call=>call.method==='drawImage');assert(draw,'expected a fresh 2D draw');return draw.args;};
     const check=(minSize=160,size=viewport)=>{
@@ -285,6 +290,8 @@ test('normal 2D image avoids measured controls and panels on mobile and desktop 
     // Resize through both CSS layouts and restore the exact original framing.
     f.canvasCalls.length=0;f.resize(844,390);check(160,[844,390]);
     f.canvasCalls.length=0;f.resize(320,568);check(160,[320,568]);
+    f.canvasCalls.length=0;f.resize(667,375);check(160,[667,375]);
+    f.canvasCalls.length=0;f.resize(736,414);check(160,[736,414]);
     f.canvasCalls.length=0;f.resize(...viewport);check();assert.deepEqual(image().slice(1),original);
   }
 });
