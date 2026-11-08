@@ -117,7 +117,30 @@ def parse_track(gpx, config):
         if i: km += distance(pts[i-1], p)
         p.append(round(km, 6))
     if km <= 0: raise ValueError('Track has zero distance')
-    lons, lats = [p[0] for p in pts], [p[1] for p in pts]
+    landmarks = []
+    for mark in config.get('landmarks', []):
+        if not isinstance(mark, dict) or not isinstance(mark.get('name'), str) or not mark['name'].strip() or not isinstance(mark.get('positionSource'), str) or not mark['positionSource'].strip():
+            raise ValueError('Each landmark needs name and positionSource')
+        preserve = mark.get('preservePosition', False)
+        if type(preserve) is not bool: raise ValueError('preservePosition must be boolean')
+        if preserve and ('index' in mark or 'lon' not in mark or 'lat' not in mark):
+            raise ValueError('preservePosition requires lon/lat without index')
+        if 'index' in mark:
+            idx = mark['index']
+            if type(idx) is not int or not 0 <= idx < len(pts): raise ValueError('Landmark index outside track')
+        elif 'lon' in mark and 'lat' in mark:
+            if preserve and any(type(mark[k]) not in (int, float) for k in ('lon', 'lat')):
+                raise ValueError('Landmark coordinates must be numbers')
+            lon, lat = finite(mark['lon'], 'landmark longitude'), finite(mark['lat'], 'landmark latitude')
+            if not -180 <= lon <= 180 or not -85 <= lat <= 85: raise ValueError('Invalid landmark coordinates')
+            idx = min(range(len(pts)), key=lambda i: distance(pts[i], [lon, lat]))
+        else: raise ValueError('Landmark requires an explicit track index or lon/lat; names alone do not locate it')
+        landmark = {'name':mark['name'], 'index':idx, 'positionSource':mark['positionSource']}
+        if preserve:
+            landmark.update(preservePosition=True, point=[lon, lat, pts[idx][2], pts[idx][3]], elevationSource='nearest-track-reference')
+        landmarks.append(landmark)
+    extent_points = pts + [m['point'] for m in landmarks if m.get('preservePosition')]
+    lons, lats = [p[0] for p in extent_points], [p[1] for p in extent_points]
     if max(lons)-min(lons) > 5 or max(lats)-min(lats) > 5:
         raise ValueError('Route spans over 5 degrees or crosses the antimeridian; split it into local routes')
     coslat = math.cos(math.radians((min(lats)+max(lats))/2))
@@ -126,11 +149,12 @@ def parse_track(gpx, config):
     # Widen a straight route's corridor in ground units, not a fixed angular sliver.
     padx, pady = max(spanlon*.12, longest*.12/coslat, .002), max(spanlat*.12, longest*.12, .002)
     lon0, lon1, lat0, lat1 = min(lons)-padx, max(lons)+padx, min(lats)-pady, max(lats)+pady
+    if not (-180 < lon0 < lon1 < 180 and -85 < lat0 < lat1 < 85): raise ValueError('Padded bounds exceed supported Web Mercator region')
     mx0,my1 = merc(lon0,lat0); mx1,my0 = merc(lon1,lat1)
     scale = 40075.016686*math.cos(math.radians((lat0+lat1)/2))
     w,h = (mx1-mx0)*scale, (my1-my0)*scale
     if max(w/h,h/w) > 8: raise ValueError('Very narrow route extent; split it or supply a less elongated track')
-    for p in pts:
+    for p in extent_points:
         x,y = merc(p[0],p[1]); p.extend([round((x-mx0)/(mx1-mx0),8), round((y-my0)/(my1-my0),8)])
     def optional(key):
         val = ext(key)
@@ -188,23 +212,11 @@ def parse_track(gpx, config):
             'imageryUrl':'https://www.esri.com/en-us/arcgis/products/arcgis-living-atlas/maps',
             'terrainUrl':'https://github.com/tilezen/joerd',
             'imageryCredit':'Imagery © Esri, Maxar, Earthstar Geographics, and the GIS User Community',
-            'terrainCredit':'Terrain · Mapzen; SRTM / GMTED2010 courtesy of USGS', 'landmarks':[]}
+            'terrainCredit':'Terrain · Mapzen; SRTM / GMTED2010 courtesy of USGS', 'landmarks':landmarks}
     if 'kilometerMarkers' in config: data['kilometerMarkers'] = validate_kilometer_markers(config['kilometerMarkers'])
     import re
     if not isinstance(data['routeColor'],str) or not re.fullmatch(r'#[0-9a-fA-F]{6}',data['routeColor']): raise ValueError('routeColor must be a six-digit hex color')
     if not isinstance(data['title'],str) or not data['title'].strip(): raise ValueError('title must be a nonempty string')
-    for mark in config.get('landmarks',[]):
-        if not isinstance(mark.get('name'),str) or not mark['name'].strip() or not mark.get('positionSource'):
-            raise ValueError('Each landmark needs name and positionSource')
-        if 'index' in mark:
-            idx=mark['index']
-            if type(idx) is not int or not 0 <= idx < len(pts): raise ValueError('Landmark index outside track')
-        elif 'lon' in mark and 'lat' in mark:
-            lon,lat=finite(mark['lon'],'landmark longitude'),finite(mark['lat'],'landmark latitude')
-            if not -180 <= lon <= 180 or not -85 <= lat <= 85: raise ValueError('Invalid landmark coordinates')
-            idx=min(range(len(pts)),key=lambda i:distance(pts[i],[lon,lat]))
-        else: raise ValueError('Landmark requires an explicit track index or lon/lat; names alone do not locate it')
-        data['landmarks'].append({'name':mark['name'],'index':idx,'positionSource':mark['positionSource']})
     return data
 
 def terrain_data(bounds,w,h,zoom):
@@ -219,6 +231,17 @@ def terrain_data(bounds,w,h,zoom):
             v=el(0,0)*(1-fx)*(1-fy)+el(1,0)*fx*(1-fy)+el(0,1)*(1-fx)*fy+el(1,1)*fx*fy
             elev.append(round(v,1))
     return {'w':gw,'h':gh,'elevations':elev}
+
+def landmark_elevations(data, terrain, demo=False):
+    for mark in data['landmarks']:
+        if not mark.get('preservePosition'): continue
+        p = mark['point']
+        x, y = p[4]*(terrain['w']-1), p[5]*(terrain['h']-1)
+        ix, iy = min(terrain['w']-2, math.floor(x)), min(terrain['h']-2, math.floor(y))
+        fx, fy = x-ix, y-iy
+        i, w, e = iy*terrain['w']+ix, terrain['w'], terrain['elevations']
+        p[2] = round(e[i]*(1-fx)*(1-fy)+e[i+1]*fx*(1-fy)+e[i+w]*(1-fx)*fy+e[i+w+1]*fx*fy, 1)
+        mark['elevationSource'] = 'synthetic-terrain' if demo else 'terrain'
 
 def public_gpx(data):
     g=ET.Element('gpx',version='1.1',creator='Joker Outdoor',xmlns='http://www.topografix.com/GPX/1/1')
@@ -340,6 +363,7 @@ def build(gpx,config,out,demo=False,buildings=None):
         if type(z) is not int or type(dz) is not int or not 0 <= z <= 18 or not 0 <= dz <= 15: raise ValueError('Invalid tile zoom')
         image,box=mosaic(bounds,z,'sat');image=image.transform(size,Image.Transform.EXTENT,box,Image.Resampling.BICUBIC)
         terrain=terrain_data(bounds,w,h,dz)
+    landmark_elevations(data, terrain, demo)
     satellite=io.BytesIO();image.save(satellite,format='JPEG',quality=90)
     outputs={'terrain.json':json.dumps(terrain,separators=(',',':')).encode(), 'satellite.jpg':satellite.getvalue(), 'route.gpx':public_gpx(data)}
     if detail is not None:
