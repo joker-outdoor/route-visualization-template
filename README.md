@@ -37,8 +37,9 @@ python3 -m http.server 8080 --bind 127.0.0.1
 - 启用后，整数 `k` 从 1 到 `floor(distanceKm)`；几何位置为 `k × points[-1][3] / distanceKm`，在相邻原始轨迹点间插值并按 DEM 贴地。42.195 km 全程生成 1–42 共 42 个“km”牌，42 km 在终点前约 0.195 官方 km；不生成 43 km、不改轨迹点或统计。页面注明“公里标记按官方全程42.195 km与轨迹几何长度等比例定位”，依据仍来自所填 `positionSource`。标记不代表官方公里牌的实测坐标。
 - 公里模式下，飞行读数、当前位置、地标里程和剖面标尺采用同一比例，总里程与终点显示 3 位小数。剖面曲线像素位置、GPX 与几何距离字段保持不变；未配置时仍显示原来的几何里程。3D 和 2D 均使用同一组公里牌定义，全景减少标签密度，飞行优先当前和前方相邻公里，重合往返段按行进里程挑选，手机避开控件与剖面；每牌根节点含 `data-km`、`data-geometry-km` 和可访问名称。
 - 距离从 GPX 坐标测算；剖面保留 GPX 海拔，3D 路线贴合 DEM。地形默认夸张 3 倍，可以调回 1 倍。
-- 原 GPX 的 `Distance`（米）、`ElevationGain` / `ElevationLoss`（米）、`BeginTime` / `EndTime`（Unix 毫秒）扩展可提供记录统计。优先读取包含此轨迹段的 `trk/extensions`；逐字段缺失时回退到 `gpx/extensions`。用时也可从完整且顺序正确的逐点 ISO 时间得到。其它格式未识别的统计显示未提供，不把海拔噪声累计为正式爬升。
+- 原 GPX 的 `Distance`（米）、`ElevationGain` / `ElevationLoss`（米）、`BeginTime` / `EndTime`（Unix 毫秒）扩展可提供记录统计。优先读取包含此轨迹段的 `trk/extensions`；逐字段缺失时回退到 `gpx/extensions`。用时也可从完整且顺序正确的逐点 ISO 时间得到。其它格式未识别的统计保留为缺失，不把海拔噪声累计为正式爬升。
 - 要手工提供统计，配置 `stats` 的 `gainM`、`lossM`、`durationHours`、`sourceDistanceKm`，同时必须填写 `statsSource`。缺失值用 `null`。
+- 主统计卡的累计爬升、累计下降、最高海拔、时长、平均配速、配速里程缺少可靠有限数值时，隐藏整项标题和值；可靠值恢复后重新显示。爬升、下降须非负（0 有效），最高海拔允许 0 和负值；时长优先使用非负运动秒数，否则回退到非负总耗时，换算结果也须有限。平均配速须大于 0，配速里程还须有有效配速且里程大于 0。`null`、字符串等不转为 0；数据说明中的缺失解释仍保留。
 - 可选 `routeColor` 为六位十六进制统一色；默认沿用模板颜色。网页提供统一 / 海拔 / 速度着色，3D 粗线、细线、遮挡线、2D 与剖面使用相同映射，速度由红色（最慢，`#ef4444`）经黄色（中间，`#facc15`）到绿色（最快，`#22c55e`），使用原有中间 90% 分位范围；少量或常量时取实际范围。海拔配色不变，图例注明单位与缺失 / 停留，缺失与停留仍使用独立颜色。旧数据无速度时禁用速度按钮。日期保留在数据中，默认不在 UI 展示。
 - 两步路 `Document id="TbuluKmlVersion2"` 的 KML `PauseTime` 单位为毫秒：运动时间 = 总耗时减暂停。原记录里程优先用于平均配速；地图里程仍按坐标测算，分别注明口径。`SportAvgSpeed` 仅在与里程 / 运动时间一致时采用。其它导出方或 GPX 的 `PauseTime` 单位不猜测；核实后可配置有 `statsSource` 的 `stats.pauseSeconds`。缺少可靠暂停统计时只显示总耗时（未扣暂停），不伪造运动时间或平均配速。
 - `points` 仍为六列 `[lon,lat,elevation,track-km,u,v]`；并行 `speedMps` / `speedState` 与点序对齐，单位为 `speedUnit="m/s"`，来源见 `speedSource`。速度按相邻坐标与时间差推算，不解码语义未知的 `GxTrackExtendedData`。首点、缺失时间和零时间差为 `null / missing`；超过 30 秒的间隔为 `null / gap`；低于 0.5 m/s 标为 `stopped`。速度表示结束于该点的区间；停留不显示配速。这些局部标记不替代原记录暂停汇总。

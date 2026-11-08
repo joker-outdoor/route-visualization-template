@@ -358,14 +358,22 @@ function fillDetails() {
   $('distance').textContent = (activityDistance ? D.stats.sourceDistanceKm : D.stats.distanceKm).toFixed(2);
   $('distance-source').textContent = activityDistance ? D.activityDistanceSource : '轨迹测算';
   for (const [id, key] of [['gain', 'gainM'], ['loss', 'lossM'], ['max', 'maxM']]) {
-    $(id).replaceChildren(document.createTextNode(D.stats[key] === null ? '未提供' : Math.round(D.stats[key]).toLocaleString('en-US') + ' '));
-    if (D.stats[key] !== null) { const unit = document.createElement('em'); unit.textContent = 'm'; $(id).append(unit); }
+    const value = D.stats[key], valid = Number.isFinite(value) && (key === 'maxM' || value >= 0);
+    $(id).parentElement.hidden = !valid;
+    $(id).replaceChildren(document.createTextNode(valid ? Math.round(value).toLocaleString('en-US') + ' ' : ''));
+    if (valid) { const unit = document.createElement('em'); unit.textContent = 'm'; $(id).append(unit); }
   }
-  const moving = Number.isFinite(D.stats.movingSeconds) ? D.stats.movingSeconds : null;
+  const moving = Number.isFinite(D.stats.movingSeconds) && D.stats.movingSeconds >= 0 ? D.stats.movingSeconds : null;
+  const duration = moving ?? (Number.isFinite(D.stats.durationHours) && D.stats.durationHours >= 0 ? D.stats.durationHours * 3600 : null);
   $('duration-label').textContent = moving === null ? '总耗时 · 未扣暂停' : '运动时间';
-  $('duration').textContent = formatDuration(moving ?? (D.stats.durationHours === null ? null : D.stats.durationHours * 3600));
+  $('duration').parentElement.hidden = !Number.isFinite(duration);
+  $('duration').textContent = formatDuration(duration);
+  const paceValid = Number.isFinite(D.stats.avgPaceSecondsKm) && D.stats.avgPaceSecondsKm > 0;
+  const paceDistanceValid = paceValid && Number.isFinite(D.stats.paceDistanceKm) && D.stats.paceDistanceKm > 0;
+  $('pace').parentElement.hidden = !paceValid;
   $('pace').textContent = formatPace(D.stats.avgPaceSecondsKm);
-  $('pace-basis').textContent = D.stats.avgPaceSecondsKm > 0 ? `${D.stats.paceDistanceKm.toFixed(2)} km` : '未提供';
+  $('pace-basis').parentElement.hidden = !paceDistanceValid;
+  $('pace-basis').textContent = paceDistanceValid ? `${D.stats.paceDistanceKm.toFixed(2)} km` : '';
   $('pace-basis-label').textContent = D.stats.sourceDistanceKm != null ? '配速按原记录里程' : '配速按坐标里程';
   color = D.routeColor || '#b9ef69'; document.documentElement.style.setProperty('--green', color);
   const speedButton = document.querySelector('[data-color="speed"]');
