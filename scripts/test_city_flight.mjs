@@ -81,10 +81,16 @@ export async function sceneFixture({buildingsFile='buildings.json',badFetch=fals
     const classes=new Set();
     if(!elements.has(id))elements.set(id,{id,value:({exag:'3','building-exag':'1.5','flight-progress':'0','flight-speed':'1'})[id]||'',hidden:id==='point-card',disabled:false,
       offsetWidth:48,offsetHeight:22,textContent:id==='maximize-view'?'最大化3D':'',style:{setProperty(){}},children:[],attrs:new Map(id==='maximize-view'?[['aria-pressed','false']]:[]),classList:{remove(c){classes.delete(c);},contains(c){return classes.has(c);},toggle(c,force){const on=force??!classes.has(c);if(on)classes.add(c);else classes.delete(c);return on;}},
-      remove(){this.removed=true;},append(...items){this.children.push(...items);},setAttribute(k,v){this.attrs.set(k,v);},getAttribute(k){return this.attrs.get(k);},
+      remove(){this.removed=true;},append(...items){for(const item of items){item.parentElement=this;this.children.push(item);}},
+      replaceChildren(...items){for(const item of this.children)item.parentElement=null;this.children=[];this.append(...items);},
+      setAttribute(k,v){this.attrs.set(k,v);},getAttribute(k){return this.attrs.get(k);},removeAttribute(k){this.attrs.delete(k);},
       addEventListener(){},cloneNode(){return this;},replaceWith(){},getContext(){return new Proxy({},{get:(_,method)=>(...args)=>{canvasCalls.push({method,args});if(method==='createLinearGradient')return {addColorStop(){}};}});},getBoundingClientRect(){return rect(id);}});
     return elements.get(id);
   }
+  for(const [id,label] of [['gain'],['loss'],['max'],['duration','duration-label'],['pace'],['pace-basis','pace-basis-label']]){
+    element(Symbol()).append(element(label??Symbol()),element(id));
+  }
+  for(const id of ['imagery-credit','terrain-credit'])element(Symbol()).append(element(id));
   let tick,scene,camera,controls,fetches=0,clock=0;
   class Renderer {
     constructor(){this.domElement=element('map');this.capabilities={getMaxAnisotropy:()=>1};}
@@ -112,7 +118,7 @@ export async function sceneFixture({buildingsFile='buildings.json',badFetch=fals
   const terrain=structuredClone(terrainData||JSON.parse(await readFile(new URL('../data/terrain.json',import.meta.url),'utf8')));
   if(flat)terrain.elevations.fill(500);
   const context=vm.createContext({...style,THREE:{...THREE,WebGLRenderer:Renderer,TextureLoader:class{async loadAsync(){return new THREE.Texture({width:1024,height:1024});}}},OrbitControls:Controls,
-    document:{getElementById:element,createElement:()=>element(Symbol()),createTextNode:text=>({textContent:text}),querySelector:element,querySelectorAll:selector=>selector==='.kilometer'?Array.from(elements.values()).filter(e=>e.className==='map-label kilometer'&&!e.removed):[]},matchMedia:()=>({matches:reduced}),
+    document:{documentElement:element('html'),getElementById:element,createElement:()=>element(Symbol()),createTextNode:text=>({textContent:text}),querySelector:element,querySelectorAll:selector=>selector==='.kilometer'?Array.from(elements.values()).filter(e=>e.className==='map-label kilometer'&&!e.removed):[]},matchMedia:()=>({matches:reduced}),
     innerWidth:width,innerHeight:height,devicePixelRatio:1,performance:{now:()=>clock},addEventListener(name,fn){events.set(name,fn);},console:{...console,warn(){},error(){}},URL,encodeURIComponent,
     Image:class{constructor(){this.width=1200;this.height=1200;}async decode(){if(imageFailure)throw new Error('fixture image failure');}},
     AbortSignal,location:{href:'http://localhost/'},fetch:async url=>{fetches++;if(badFetch)throw new Error('fixture failure');return {ok:true,json:async()=>url==='data/imagery-detail.json'?detailManifest:buildings};}});
@@ -127,6 +133,80 @@ export async function sceneFixture({buildingsFile='buildings.json',badFetch=fals
   return {focusStep(now){clock=now;tick(now);},run:code=>vm.runInContext(code,context),element,canvasCalls,hiddenRectReads,allElements:()=>Array.from(elements.values()).filter(e=>!e.removed),display:km=>vm.runInContext(`distanceText(${km})`,context),step:tick,rect,get scene(){return scene;},get camera(){return camera;},get controls(){return controls;},get fetches(){return fetches;},point:()=>vm.runInContext('flightPoint',context),flat:()=>vm.runInContext('flatFallback()',context),
     resize(w,h){width=w;height=h;context.innerWidth=w;context.innerHeight=h;events.get('resize')();}};
 }
+
+test('main stats hide missing or nonnumeric values with their labels and recover on the same nodes',async()=>{
+  const f=await sceneFixture({buildingsFile:null});
+  f.run('D.landmarks=[]');
+  const ids=['gain','loss','max','duration','pace','pace-basis'];
+  const parents=ids.map(id=>f.element(id).parentElement);
+  for(const [i,id] of ids.entries()){
+    assert.equal(parents[i].children.length,2,`${id} shares its container with its label`);
+    assert.equal(parents[i].children[1],f.element(id));
+  }
+  const valid='gainM:1200,lossM:900,maxM:2500,movingSeconds:3600,durationHours:2,avgPaceSecondsKm:360,paceDistanceKm:10';
+  const render=stats=>f.run(`Object.assign(D.stats,{${stats}});fillDetails()`);
+  render(valid);
+  for(const value of ['null','undefined','NaN','Infinity','-Infinity','"12"','true']){
+    render(['gainM','lossM','maxM','movingSeconds','durationHours','avgPaceSecondsKm','paceDistanceKm'].map(key=>`${key}:${value}`).join(','));
+    for(const [i,id] of ids.entries())assert.equal(parents[i].hidden,true,`${id} hidden for ${value}`);
+    if(value==='null'){
+      assert.match(f.element('data-note').textContent,/暂停统计不足，未计算运动配速/);
+      assert.equal(f.element('data-note').hidden,false);
+    }
+    render(valid);
+    for(const [i,id] of ids.entries()){
+      assert.equal(f.element(id).parentElement,parents[i]);
+      assert.equal(parents[i].hidden,false,`${id} restored after ${value}`);
+    }
+  }
+  assert.equal(f.element('gain').children[0].textContent,'1,200 ');
+  assert.equal(f.element('gain').children[1].textContent,'m');
+  assert.equal(f.element('duration').textContent,'1h 00m 00s');
+  assert.equal(f.element('pace').textContent,'6′00″/km');
+  assert.equal(f.element('pace-basis').textContent,'10.00 km');
+});
+
+test('zero gain/loss and nonpositive altitudes remain valid; duration prefers motion and falls back safely',async()=>{
+  const f=await sceneFixture({buildingsFile:null});
+  const render=stats=>f.run(`D.landmarks=[];Object.assign(D.stats,{${stats}});fillDetails()`);
+  render('gainM:0,lossM:0,maxM:0,movingSeconds:0,durationHours:2,avgPaceSecondsKm:0,paceDistanceKm:0');
+  for(const id of ['gain','loss','max','duration'])assert.equal(f.element(id).parentElement.hidden,false,`${id} accepts zero`);
+  for(const id of ['gain','loss','max'])assert.equal(f.element(id).children[0].textContent,'0 ');
+  assert.equal(f.element('duration').textContent,'0h 00m 00s');
+  assert.equal(f.element('duration-label').textContent,'运动时间');
+  for(const id of ['pace','pace-basis'])assert.equal(f.element(id).parentElement.hidden,true);
+  render('gainM:-1,lossM:-1,maxM:-430,movingSeconds:-1,durationHours:-1,avgPaceSecondsKm:-1');
+  for(const id of ['gain','loss','duration','pace','pace-basis'])assert.equal(f.element(id).parentElement.hidden,true);
+  assert.equal(f.element('max').parentElement.hidden,false);
+  assert.equal(f.element('max').children[0].textContent,'-430 ');
+  for(const value of ['null','undefined','NaN','Infinity','-Infinity','"60"','true','-1']){
+    render(`movingSeconds:${value},durationHours:2.5`);
+    assert.equal(f.element('duration').parentElement.hidden,false);
+    assert.equal(f.element('duration').textContent,'2h 30m 00s');
+    assert.equal(f.element('duration-label').textContent,'总耗时 · 未扣暂停');
+    render(`movingSeconds:60,durationHours:${value}`);
+    assert.equal(f.element('duration').parentElement.hidden,false);
+    assert.equal(f.element('duration').textContent,'0h 01m 00s');
+  }
+  render('movingSeconds:null,durationHours:Number.MAX_VALUE');
+  assert.equal(f.element('duration').parentElement.hidden,true,'overflow during hours conversion is missing');
+  render('durationHours:0');
+  assert.equal(f.element('duration').parentElement.hidden,false);
+  assert.equal(f.element('duration').textContent,'0h 00m 00s');
+});
+
+test('pace distance requires its own positive finite value and usable pace',async()=>{
+  const f=await sceneFixture({buildingsFile:null});
+  for(const value of ['null','undefined','NaN','Infinity','-Infinity','"10"','true','0','-1']){
+    f.run(`D.landmarks=[];Object.assign(D.stats,{avgPaceSecondsKm:360,paceDistanceKm:${value}});fillDetails()`);
+    assert.equal(f.element('pace').parentElement.hidden,false);
+    assert.equal(f.element('pace-basis').parentElement.hidden,true,`distance hidden for ${value}`);
+    f.run('D.stats.paceDistanceKm=10;fillDetails()');
+    assert.equal(f.element('pace-basis').parentElement.hidden,false);
+    f.run(`D.stats.avgPaceSecondsKm=${value};fillDetails()`);
+    for(const id of ['pace','pace-basis'])assert.equal(f.element(id).parentElement.hidden,true,`${id} hidden for invalid pace ${value}`);
+  }
+});
 
 test('app handlers move the camera, freeze pause, seek, replay, toggle mesh and interrupt on overview',async()=>{
   const f=await sceneFixture(),e=f.element;
