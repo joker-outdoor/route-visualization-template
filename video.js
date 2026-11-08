@@ -1,4 +1,5 @@
 import * as THREE from 'three';
+import { landmarkPoint } from './route-style.js';
 const $ = id => document.getElementById(id);
 const clamp = (x, a=0, b=1) => Math.max(a, Math.min(b,x));
 const smooth = x => { x=clamp(x); return x*x*(3-2*x); };
@@ -43,8 +44,8 @@ try {
   const labels=lakes.map((l,i)=>{
     const el=document.createElement('div');el.className='label';
     const b=document.createElement('b');b.textContent=String(i+1);el.append(b,document.createTextNode(l.name));
-    const s=document.createElement('span');s.textContent=`${points[l.index][3].toFixed(1)} km`;el.append(s);$('labels').append(el);
-    const p=xyz(points[l.index]);p.y+=span*.03;return {el,p,index:l.index};
+    const s=document.createElement('span');s.textContent=`${l.preservePosition ? '最近轨迹 ' : ''}${points[l.index][3].toFixed(1)} km`;el.append(s);$('labels').append(el);
+    const p=xyz(landmarkPoint(D,l));p.y+=span*.03;return {el,p,index:l.index};
   });
   const profile=$('profile'),ctx=profile.getContext('2d');
   profile.width=profile.clientWidth;profile.height=profile.clientHeight;

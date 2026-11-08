@@ -82,10 +82,10 @@ export async function sceneFixture({buildingsFile='buildings.json',badFetch=fals
     if(!elements.has(id))elements.set(id,{id,value:({exag:'3','building-exag':'1.5','flight-progress':'0','flight-speed':'1'})[id]||'',hidden:id==='point-card',disabled:false,
       offsetWidth:48,offsetHeight:22,textContent:id==='maximize-view'?'最大化3D':'',style:{setProperty(){}},children:[],attrs:new Map(id==='maximize-view'?[['aria-pressed','false']]:[]),classList:{remove(c){classes.delete(c);},contains(c){return classes.has(c);},toggle(c,force){const on=force??!classes.has(c);if(on)classes.add(c);else classes.delete(c);return on;}},
       remove(){this.removed=true;},append(...items){this.children.push(...items);},setAttribute(k,v){this.attrs.set(k,v);},getAttribute(k){return this.attrs.get(k);},
-      addEventListener(){},cloneNode(){return this;},replaceWith(){},getContext(){return new Proxy({},{get:(_,method)=>(...args)=>{canvasCalls.push({method,args});}});},getBoundingClientRect(){return rect(id);}});
+      addEventListener(){},cloneNode(){return this;},replaceWith(){},getContext(){return new Proxy({},{get:(_,method)=>(...args)=>{canvasCalls.push({method,args});if(method==='createLinearGradient')return {addColorStop(){}};}});},getBoundingClientRect(){return rect(id);}});
     return elements.get(id);
   }
-  let tick,scene,camera,controls,fetches=0;
+  let tick,scene,camera,controls,fetches=0,clock=0;
   class Renderer {
     constructor(){this.domElement=element('map');this.capabilities={getMaxAnisotropy:()=>1};}
     setPixelRatio(){}setSize(){}setAnimationLoop(fn){tick=fn;}
@@ -113,18 +113,18 @@ export async function sceneFixture({buildingsFile='buildings.json',badFetch=fals
   if(flat)terrain.elevations.fill(500);
   const context=vm.createContext({...style,THREE:{...THREE,WebGLRenderer:Renderer,TextureLoader:class{async loadAsync(){return new THREE.Texture({width:1024,height:1024});}}},OrbitControls:Controls,
     document:{getElementById:element,createElement:()=>element(Symbol()),createTextNode:text=>({textContent:text}),querySelector:element,querySelectorAll:selector=>selector==='.kilometer'?Array.from(elements.values()).filter(e=>e.className==='map-label kilometer'&&!e.removed):[]},matchMedia:()=>({matches:reduced}),
-    innerWidth:width,innerHeight:height,devicePixelRatio:1,performance:{now:()=>0},addEventListener(name,fn){events.set(name,fn);},console:{...console,warn(){},error(){}},URL,encodeURIComponent,
+    innerWidth:width,innerHeight:height,devicePixelRatio:1,performance:{now:()=>clock},addEventListener(name,fn){events.set(name,fn);},console:{...console,warn(){},error(){}},URL,encodeURIComponent,
     Image:class{constructor(){this.width=1200;this.height=1200;}async decode(){if(imageFailure)throw new Error('fixture image failure');}},
     AbortSignal,location:{href:'http://localhost/'},fetch:async url=>{fetches++;if(badFetch)throw new Error('fixture failure');return {ok:true,json:async()=>url==='data/imagery-detail.json'?detailManifest:buildings};}});
   const body=source.replace(/^import .*;\n/gm,'').slice(0,source.replace(/^import .*;\n/gm,'').lastIndexOf('\nmain().catch'));
   vm.runInContext(body,context);
   beforeInit?.(element);
   context.route=route;context.terrain=terrain;
-  vm.runInContext('D=route;T=terrain;points=D.points;pointColors=points.map(()=>"#aabbcc");drawProfile=()=>{};',context);
+  vm.runInContext('D=route;T=terrain;points=D.points;originalDrawProfile=drawProfile;pointColors=points.map(()=>"#aabbcc");drawProfile=()=>{};',context);
   if(start==='failure')await vm.runInContext(source.slice(source.lastIndexOf('\nmain().catch')),context);
   else if(start==='2d')await vm.runInContext('flatFallback()',context);
   else {await vm.runInContext('init3D()',context);await new Promise(r=>setImmediate(r));tick(0);}
-  return {element,canvasCalls,hiddenRectReads,allElements:()=>Array.from(elements.values()).filter(e=>!e.removed),display:km=>vm.runInContext(`distanceText(${km})`,context),step:tick,rect,get scene(){return scene;},get camera(){return camera;},get controls(){return controls;},get fetches(){return fetches;},point:()=>vm.runInContext('flightPoint',context),flat:()=>vm.runInContext('flatFallback()',context),
+  return {focusStep(now){clock=now;tick(now);},run:code=>vm.runInContext(code,context),element,canvasCalls,hiddenRectReads,allElements:()=>Array.from(elements.values()).filter(e=>!e.removed),display:km=>vm.runInContext(`distanceText(${km})`,context),step:tick,rect,get scene(){return scene;},get camera(){return camera;},get controls(){return controls;},get fetches(){return fetches;},point:()=>vm.runInContext('flightPoint',context),flat:()=>vm.runInContext('flatFallback()',context),
     resize(w,h){width=w;height=h;context.innerWidth=w;context.innerHeight=h;events.get('resize')();}};
 }
 
@@ -456,4 +456,81 @@ test('kilometer roots, geometry mapping, endpoint readouts, overlap priority and
   const invalid=await sceneFixture({buildingsFile:null,routeData:{...route,kilometerMarkers:{distanceKm:true,positionSource:'x'}},flat:true});
   assert.equal(invalid.allElements().filter(el=>el.getAttribute('data-km')!=null).length,0);assert.equal(invalid.display(1.25),'1.25');
   assert.equal(invalid.element('flight-play').disabled,false);
+});
+
+
+test('independent landmark handlers use actual position for labels, focus and selection, while profile stays on track',async()=>{
+  const route=JSON.parse(await readFile(new URL('../data/route.json',import.meta.url),'utf8'));
+  const index=Math.floor(route.points.length/2),track=route.points[index];
+  const p=[route.bounds.lon0,route.bounds.lat0,1234,track[3],.15,.8];
+  route.landmarks=[{name:'独立景点',index,preservePosition:true,point:p,elevationSource:'terrain',positionSource:'fixture WGS84'}];
+  const f=await sceneFixture({buildingsFile:null,routeData:route}),e=f.element;
+  const label=f.run('markerLabels[0]');
+  assert.deepEqual(Array.from(label.p),p);
+  assert.equal(label.top.x,(p[4]-.5)*route.widthKm);
+  assert.equal(label.top.z,(p[5]-.5)*route.heightKm);
+  // Invoke the real map-label handler and inspect its camera destination.
+  f.run('actualFocus=focus;focus=p=>{focused=p;actualFocus(p);};');
+  label.el.onclick();
+  // Capture the destination passed to the public focus callback.
+  const expectedTarget=f.run('focused');
+  assert.deepEqual(Array.from(expectedTarget),p);
+  f.focusStep(700);assert.equal(f.controls.target.x,label.top.x);assert.equal(f.controls.target.z,label.top.z);
+  assert.match(e('point-detail').textContent,/景点位置.*地形估算 1234 m.*最近轨迹里程/);
+  assert.doesNotMatch(e('point-detail').textContent,/速度|km\/h|配速/);
+  f.step(16);
+  const marker=f.scene.getObjectByName('route-marker');
+  assert.equal(marker.position.x,label.top.x);assert.equal(marker.position.z,label.top.z);
+  // Run the actual list creation loop; its onclick must focus the same point.
+  const list=source.slice(source.indexOf('  D.landmarks.forEach((landmark, i) => {',source.indexOf('function fillDetails()')),source.indexOf('\n}\nfunction sample('));
+  f.run(list);const button=e('landmark-list').children[0].children[0];button.onclick();
+  assert.deepEqual(Array.from(f.run('selectedMapPoint()')),p);
+  assert.deepEqual(Array.from(f.run('focused')),p);
+  // Profile uses original track elevation and distance, even with a selected POI.
+  f.canvasCalls.length=0;f.run('originalDrawProfile()');
+  const arc=f.canvasCalls.filter(c=>c.method==='arc').at(-1),r=e('chart').getBoundingClientRect();
+  const e0=Math.floor(route.stats.minM/100)*100,e1=Math.max(e0+100,Math.ceil(route.stats.maxM/100)*100);
+  assert.equal(arc.args[0],36+track[3]/route.stats.distanceKm*(r.width-45));
+  assert.equal(arc.args[1],24+(e1-track[2])/(e1-e0)*(r.height-43));
+  await f.flat();f.canvasCalls.length=0;
+  const flatLabel=f.run('markerLabels[0].el');flatLabel.onclick();
+  const image=f.canvasCalls.find(c=>c.method==='drawImage'),[,x,y,w,h]=image.args;
+  const xy=[x+p[4]*w,y+p[5]*h];
+  const selected=f.canvasCalls.filter(c=>c.method==='arc').at(-1);
+  assert.deepEqual(selected.args.slice(0,2),xy);
+  assert.equal(flatLabel.style.transform,`translate(${xy[0]}px,${xy[1]}px) translate(-50%,-100%)`);
+  assert.match(e('point-detail').textContent,/最近轨迹里程/);
+  e('maximize-view').onclick();assert.equal(flatLabel.hidden,true);
+  e('maximize-view').onclick();assert.equal(flatLabel.hidden,false);
+});
+
+
+test('video labels use actual POI coordinates but keep nearest-track mileage and profile progress',async()=>{
+  const videoSource=await readFile(new URL('../video.js',import.meta.url),'utf8');
+  const points=[[0,0,500,0,.1,.1],[1,1,500,1,.9,.9]];
+  const mark={name:'独立景点',index:0,preservePosition:true,point:[.5,.5,500,0,.6,.55]};
+  for(const independent of [true,false]){
+    const landmark=independent?mark:{name:'旧景点',index:0};
+    const route={points,stats:{distanceKm:1,minM:500,maxM:500,gainM:null},widthKm:2,heightKm:2,landmarks:[landmark]};
+    const terrain={w:2,h:2,elevations:[500,500,500,500]},elements=new Map(),calls=[];
+    function el(id){if(!elements.has(id))elements.set(id,{children:[],style:{},offsetWidth:48,offsetHeight:22,clientWidth:400,clientHeight:200,
+      append(...items){this.children.push(...items);},getContext(){return new Proxy({},{get:(_,method)=>(...args)=>{calls.push({method,args});if(method==='createLinearGradient')return {addColorStop(){}};}});}});return elements.get(id);}
+    let camera;
+    class Renderer{constructor(){this.capabilities={getMaxAnisotropy:()=>1};}setSize(){}setPixelRatio(){}render(scene,c){camera=c;}}
+    const context=vm.createContext({...style,THREE:{...THREE,WebGLRenderer:Renderer,TextureLoader:class{async loadAsync(){return new THREE.Texture();}}},
+      document:{getElementById:el,createElement:()=>el(Symbol()),createTextNode:text=>({textContent:text})},window:{},innerWidth:1200,innerHeight:900,
+      fetch:async url=>({ok:true,json:async()=>url.includes('terrain')?terrain:route}),URLSearchParams,location:{search:'?capture'}});
+    await vm.runInContext('(async()=>{'+videoSource.replace(/^import .*;\n/gm,'')+'})()',context);
+    assert.equal(context.window.videoError,undefined);assert.equal(context.window.videoReady,true);
+    const label=el('labels').children[0];
+    const p=independent?mark.point:points[0];
+    const pos=new THREE.Vector3((p[4]-.5)*2,16/1000*2.4+.06,(p[5]-.5)*2).project(camera);
+    assert.equal(label.style.visibility,'visible');
+    assert.equal(label.style.transform,`translate(${(pos.x+1)*600}px,${(1-pos.y)*450}px) translate(-50%,-50%)`);
+    assert.equal(label.children.at(-1).textContent,independent?'最近轨迹 0.0 km':'0.0 km');
+    const profileNumber=calls.find(c=>c.method==='fillText'&&c.args[0]==='1');
+    assert.equal(profileNumber.args[1],8); // nearest track point, not actual POI u/v
+    const frame=context.window.renderVideoFrame(23,46);
+    assert.equal(frame.km,.5);assert.equal(frame.index,1);
+  }
 });

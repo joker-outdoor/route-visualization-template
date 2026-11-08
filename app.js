@@ -1,6 +1,6 @@
 import * as THREE from 'three';
 import { OrbitControls } from './vendor/OrbitControls.js';
-import { palette, speedPalette, speedAt, valueRange, pointColor, formatPace, formatDuration, speedReadout, lengthSample, tubeColorValues, segmentColors, lineColorValues, endpointTitle, routeEndpoints } from './route-style.js';
+import { palette, speedPalette, speedAt, valueRange, pointColor, formatPace, formatDuration, speedReadout, lengthSample, tubeColorValues, segmentColors, lineColorValues, endpointTitle, routeEndpoints, landmarkPoint, landmarkReadout } from './route-style.js';
 
 const $ = id => document.getElementById(id);
 let color = '#b9ef69', colorMode = 'uniform', pointColors = [], recolorRoute = () => {};
@@ -224,17 +224,21 @@ function nearest(km) {
   while (lo < hi) { const mid = (lo + hi) >> 1; if (points[mid][3] < km) lo = mid + 1; else hi = mid; }
   return lo > 0 && Math.abs(points[lo - 1][3] - km) < Math.abs(points[lo][3] - km) ? lo - 1 : lo;
 }
+function selectedMapPoint() {
+  return selectedLandmark === null ? points[selection] : landmarkPoint(D, D.landmarks[selectedLandmark]);
+}
 function select(index, landmark = null, showCard = false) {
   pauseFlight(); flightPoint = null;
   selection = index; selectedLandmark = landmark;
   document.querySelectorAll('#landmark-list button').forEach((el, i) => el.classList.toggle('active', i === landmark));
   markerLabels.forEach(m => m.el.classList.toggle('active', m.landmark === landmark && landmark !== null));
   if (index !== null) {
-    const p = points[index];
-    $('readout').textContent = `${distanceText(p[3])} km · ${Math.round(p[2])} m · ${speedReadout(D, index)}${landmark !== null ? ' · ' + D.landmarks[landmark].name : ''}`;
+    const p = points[index], mark = landmark === null ? null : D.landmarks[landmark];
+    const independent = mark?.preservePosition === true;
+    $('readout').textContent = independent ? `${mark.name} · ${landmarkReadout(D, mark, distanceText)}` : `${distanceText(p[3])} km · ${Math.round(p[2])} m · ${speedReadout(D, index)}${landmark !== null ? ' · ' + D.landmarks[landmark].name : ''}`;
     if (showCard) {
       $('point-name').textContent = landmark !== null ? D.landmarks[landmark].name : index === 0 ? endpointTitle('start', D.startName) : index === points.length - 1 ? endpointTitle('finish', D.finishName) : '轨迹最高点';
-      $('point-detail').textContent = `${distanceText(p[3])} km / 海拔 ${Math.round(p[2])} m · ${speedReadout(D, index)}${landmark !== null ? ' · ' + D.landmarks[landmark].positionSource : ''}`;
+      $('point-detail').textContent = independent ? `${landmarkReadout(D, mark, distanceText)} · ${mark.positionSource}` : `${distanceText(p[3])} km / 海拔 ${Math.round(p[2])} m · ${speedReadout(D, index)}${landmark !== null ? ' · ' + D.landmarks[landmark].positionSource : ''}`;
       $('point-card').hidden = false;
     }
   } else $('readout').textContent = '滑过剖面，查看地图位置';
@@ -386,8 +390,8 @@ function fillDetails() {
     const li = document.createElement('li'), b = document.createElement('button');
     const n = document.createElement('b'); n.textContent = String(i + 1);
     const name = document.createElement('span'); name.className = 'name'; name.textContent = landmark.name;
-    const km = document.createElement('span'); km.className = 'km'; km.textContent = `${distanceText(points[landmark.index][3], 1)} km`;
-    b.append(n, name, km); b.onclick = () => { select(landmark.index, i, true); focus(points[landmark.index]); }; li.append(b); $('landmark-list').append(li);
+    const km = document.createElement('span'); km.className = 'km'; km.textContent = `${landmark.preservePosition ? '最近轨迹 ' : ''}${distanceText(points[landmark.index][3], 1)} km`;
+    b.append(n, name, km); b.onclick = () => { select(landmark.index, i, true); focus(landmarkPoint(D, landmark)); }; li.append(b); $('landmark-list').append(li);
   });
 }
 function sample(u, v) {
@@ -532,7 +536,7 @@ async function init3D() {
   };
   recolorRoute();
   const marker = new THREE.Mesh(new THREE.SphereGeometry(extent * .005, 14, 10), new THREE.MeshBasicMaterial({ color: '#ffffff', depthTest: false })); marker.name = 'route-marker'; marker.renderOrder = 5; marker.visible = false; world.add(marker);
-  const labelDefinitions = D.landmarks.map((landmark, i) => ({ name: landmark.name, code: String(i + 1), p: points[landmark.index], index: landmark.index, landmark: i }));
+  const labelDefinitions = D.landmarks.map((landmark, i) => ({ name: landmark.name, code: String(i + 1), p: landmarkPoint(D, landmark), index: landmark.index, landmark: i }));
   const maxIdx = points.reduce((best, p, i) => p[2] > points[best][2] ? i : best, 0);
   labelDefinitions.push({ name: `${Math.round(D.stats.maxM)} m`, code: '▲', p: points[maxIdx], index: maxIdx, cls: 'peak' });
   for (const item of labelDefinitions) {
@@ -771,7 +775,7 @@ async function init3D() {
     // Paused interpolation stays visible; it never owns or constrains the camera.
     if (!playing) controls.update();
     if (selection !== null) {
-      marker.visible = true; marker.position.copy(routePosition(flightPoint || points[selection]));
+      marker.visible = true; marker.position.copy(routePosition(flightPoint || selectedMapPoint()));
       if (flightPoint) {
         camera.updateMatrixWorld(true);
         const p = marker.position.clone(); p.y *= world.scale.y; p.applyMatrix4(camera.matrixWorldInverse);
@@ -822,7 +826,16 @@ async function flatFallback() {
   const c = canvas.getContext('2d'), img = new Image(); img.src = 'data/satellite.jpg'; await img.decode();
   recolorRoute = () => {}; focus = () => {};
   createEndpointMarkers();
-  // Clear 3D roots before creating the fallback signs.
+  // Recreate interactive labels when switching from a lost 3D scene.
+  markerLabels.forEach(item => item.el.remove()); markerLabels.length = 0;
+  const flatLabels = D.landmarks.flatMap((landmark, i) => {
+    if (!landmark.preservePosition) return [];
+    const el = document.createElement('button'); el.className = 'map-label';
+    el.textContent = `${i + 1} ${landmark.name}`;
+    el.onclick = () => { select(landmark.index, i, true); focus(landmarkPoint(D, landmark)); };
+    $('labels').append(el); markerLabels.push({el, landmark:i});
+    return [{el, p:landmarkPoint(D, landmark)}];
+  });
   document.querySelectorAll('.kilometer').forEach(el => el.remove());
   const kilometerLabels = kilometerDefinitions().map(item => ({...item, el: kilometerElement(item)}));
   document.querySelector('.profile-foot span:first-child').textContent = '卫星俯视图 · 用剖面或地标列表定位';
@@ -846,16 +859,20 @@ async function flatFallback() {
     }
     const availableHeight = area.bottom - area.top, availableWidth = area.right - area.left;
     if (availableWidth <= 0 || availableHeight <= 0) {
-      [...endpointMarkers, ...kilometerLabels].forEach(item => { item.el.hidden = true; });
+      [...endpointMarkers, ...kilometerLabels, ...flatLabels].forEach(item => { item.el.hidden = true; });
       return;
     }
     const scale = Math.min(availableWidth / img.width, availableHeight / img.height);
     const w = img.width * scale, h = img.height * scale;
     const x0 = area.left + (availableWidth - w) / 2, y0 = area.top + (availableHeight - h) / 2;
     c.drawImage(img, x0, y0, w, h); strokeRoute(c, p => [x0 + p[4] * w, y0 + p[5] * h], 2);
-    D.landmarks.forEach((landmark, i) => { const p = points[landmark.index], x = x0 + p[4] * w, y = y0 + p[5] * h; c.fillStyle = '#6ee1db'; c.beginPath(); c.arc(x, y, 4, 0, 7); c.fill(); if (!maximized) { c.font = '11px system-ui'; c.fillText(`${i + 1} ${landmark.name.split('（')[0]}`, x + 7, y); } });
+    D.landmarks.forEach((landmark, i) => { const p = landmarkPoint(D, landmark), x = x0 + p[4] * w, y = y0 + p[5] * h; c.fillStyle = '#6ee1db'; c.beginPath(); c.arc(x, y, 4, 0, 7); c.fill(); if (!maximized && !landmark.preservePosition) { c.font = '11px system-ui'; c.fillText(`${i + 1} ${landmark.name.split('（')[0]}`, x + 7, y); } });
+    flatLabels.forEach(({el, p}) => {
+      el.hidden = maximized;
+      el.style.transform = `translate(${x0+p[4]*w}px,${y0+p[5]*h}px) translate(-50%,-100%)`;
+    });
     placeKilometers(kilometerLabels, item => ({x:x0+item.p[4]*w, y:y0+item.p[5]*h}));
-    if (selection !== null) { const p = points[selection]; c.fillStyle = '#fff'; c.beginPath(); c.arc(x0 + p[4] * w, y0 + p[5] * h, 5, 0, 7); c.fill(); }
+    if (selection !== null) { const p = selectedMapPoint(); c.fillStyle = '#fff'; c.beginPath(); c.arc(x0 + p[4] * w, y0 + p[5] * h, 5, 0, 7); c.fill(); }
     renderEndpointMarkers(endpointMarkers.map(item => ({ x: x0 + points[item.index][4] * w, y: y0 + points[item.index][5] * h })));
   };
   refreshView = () => { renderMap(); drawProfile(); };

@@ -78,6 +78,80 @@ class RouteTests(unittest.TestCase):
         with self.assertRaises(ValueError): build(self.p,self.config,out,True)
         self.assertEqual((out/'route.json').read_text(),'unchanged')
 
+class IndependentLandmarkTests(unittest.TestCase):
+    setUp = RouteTests.setUp
+    write = RouteTests.write
+    def mark(self, **changes):
+        return dict(name='独立景点', lon=104.02, lat=30.01, preservePosition=True, positionSource='WGS84 fixture', **changes)
+    def test_preserved_coordinates_expand_bounds_and_sample_final_dem_without_changing_track(self):
+        import json
+        from unittest.mock import patch
+        from PIL import Image
+        from build_data import public_gpx
+        self.write();before=parse_track(self.p,self.config)
+        self.config['landmarks']=[self.mark()]
+        parsed=parse_track(self.p,self.config);mark=parsed['landmarks'][0]
+        self.assertEqual(mark['point'][:4],[104.02,30.01,-20,parsed['points'][2][3]])
+        self.assertEqual(mark['elevationSource'],'nearest-track-reference')
+        self.assertGreater(parsed['bounds']['lon1'],before['bounds']['lon1'])
+        self.assertNotEqual(parsed['points'][0][4:],before['points'][0][4:])
+        out=Path(self.tmp.name)/'data'
+        terrain={'w':2,'h':2,'elevations':[100,200,300,400]}
+        with patch('build_data.mosaic',return_value=(Image.new('RGB',(8,8)),(0,0,8,8))), patch('build_data.terrain_data',return_value=terrain):
+            data=build(self.p,self.config,out)
+        mark=data['landmarks'][0];u,v=mark['point'][4:]
+        self.assertEqual(mark['point'][2],round(100+100*u+200*v,1))
+        self.assertEqual(mark['elevationSource'],'terrain');self.assertEqual(mark['index'],2)
+        self.assertTrue(all(0<value<1 for value in (u,v)))
+        for key in ('stats','speedMps','speedState'): self.assertEqual(data[key],before[key])
+        self.assertEqual([p[:4] for p in data['points']],[p[:4] for p in before['points']])
+        self.assertEqual((out/'route.gpx').read_bytes(),public_gpx(before));check(out)
+        demo=build(self.p,self.config,out,True)
+        self.assertEqual(demo['landmarks'][0]['elevationSource'],'synthetic-terrain');check(out)
+
+    def test_default_and_false_keep_snapping_and_do_not_expand_bounds(self):
+        self.write();self.config['landmarks']=[dict(name='旧景点',lon=104.02,lat=30.01,positionSource='fixture')]
+        before=parse_track(self.p,self.config)
+        self.config['landmarks'][0]['preservePosition']=False
+        self.assertEqual(parse_track(self.p,self.config),before)
+        self.assertNotIn('point',before['landmarks'][0])
+        self.assertLess(before['bounds']['lon1'],104.02)
+
+    def test_invalid_preservation_and_excessive_or_polar_extent_keep_old_outputs(self):
+        self.write();out=Path(self.tmp.name)/'data';out.mkdir();(out/'route.json').write_text('unchanged')
+        bads=[dict(preservePosition=value) for value in (None,1,'true',[])]
+        bads += [dict(lon=value) for value in (True,'104.02',float('nan'),float('inf'),181,110)]
+        bads += [dict(lat=value) for value in (float('nan'),86,-86)]
+        bads += [dict(index=1),dict(lon=None),dict(lat=None)]
+        for changes in bads:
+            mark=self.mark();mark.update(changes);self.config['landmarks']=[mark]
+            with self.subTest(changes=changes),self.assertRaises((ValueError,TypeError)):
+                build(self.p,self.config,out,True)
+            self.assertEqual((out/'route.json').read_text(),'unchanged')
+        for key in ('lon','lat'):
+            mark=self.mark();del mark[key];self.config['landmarks']=[mark]
+            with self.assertRaisesRegex(ValueError,'lon/lat'): parse_track(self.p,self.config)
+        self.config['landmarks']=[dict(name='x',index=1,preservePosition=True,positionSource='x')]
+        with self.assertRaisesRegex(ValueError,'lon/lat'): parse_track(self.p,self.config)
+        self.config.pop('landmarks')
+        g=ET.parse(self.p).getroot()
+        for p in g.findall('.//{*}trkpt'): p.set('lat','84.999')
+        ET.ElementTree(g).write(self.p)
+        with self.assertRaisesRegex(ValueError,'Padded bounds'): parse_track(self.p,self.config)
+
+    def test_checker_rejects_malformed_independent_points_and_associations(self):
+        import copy, json
+        self.write();self.config['landmarks']=[self.mark()];out=Path(self.tmp.name)/'data';original=build(self.p,self.config,out,True)
+        bads=[dict(preservePosition='true'),dict(point=None),dict(point=[1,2]),dict(elevationSource='unknown'),dict(index=0)]
+        for column,value in ((0,181),(1,float('nan')),(2,True),(3,99),(4,1.1),(4,.1),(5,-.1)):
+            point=original['landmarks'][0]['point'].copy();point[column]=value;bads.append(dict(point=point))
+        for changes in bads:
+            broken=copy.deepcopy(original);broken['landmarks'][0].update(changes)
+            # Isolate the nearest-index check from the linked-mileage check.
+            if changes.get('index') == 0: broken['landmarks'][0]['point'][3]=0
+            (out/'route.json').write_text(json.dumps(broken))
+            with self.subTest(changes=changes),self.assertRaises(AssertionError): check(out)
+
 class BuildingTests(unittest.TestCase):
     setUp = RouteTests.setUp
     write = RouteTests.write

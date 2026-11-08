@@ -89,3 +89,13 @@ export function routeEndpoints(data) {
     { kind: 'finish', index: data.points.length - 1, title: endpointTitle('finish', data.finishName), color: '#ef4444' }
   ];
 }
+
+// Map position is independent of the track index used by the profile and progress.
+export function landmarkPoint(data, landmark) {
+  return landmark.point ?? data.points[landmark.index];
+}
+export function landmarkReadout(data, landmark, distanceText) {
+  const p = landmarkPoint(data, landmark);
+  const source = {terrain:'地形估算', 'synthetic-terrain':'合成地形演示', 'nearest-track-reference':'最近轨迹海拔参考'}[landmark.elevationSource] || '海拔来源未提供';
+  return `景点位置 ${p[0].toFixed(6)}, ${p[1].toFixed(6)} · ${source} ${Math.round(p[2])} m · 最近轨迹里程 ${distanceText(data.points[landmark.index][3])} km`;
+}

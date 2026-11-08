@@ -31,7 +31,8 @@ python3 -m http.server 8080 --bind 127.0.0.1
 
 - 必填 `title` 和 `madeOn`（页面日期）；`recordedOn` 是原轨迹日期，可置空，不能把页面日期或文件名当活动日期。
 - 可选 `subtitle`、`routeLabel`、`startName`、`finishName`、`landmarkTitle`、`landmarkNote`。起点为绿圆点（`#22c55e`），终点为红圆点（`#ef4444`）；3D / 2D 都沿用真实轨迹端点，无文字标签、边框或引线。起终点名称用于悬停提示、无障碍名称与点击详情，两点屏幕距离不足 16px 时，仅将圆点沿连线方向小幅推开到 16px，轨迹坐标和点击对应点不变。
-- `landmarks` 的每项必须有 `name`、`positionSource`，以及零起始的 `index` 或 WGS84 `lon` / `lat`。坐标吸附到最近轨迹点。只有名称和顺序时，先补定位依据；不要按里程比例伪造地标位置。概略定位必须写明。
+- `landmarks` 的每项必须有 `name`、`positionSource`，以及零起始的 `index` 或 WGS84 `lon` / `lat`。缺省或 `preservePosition:false` 时，坐标吸附到最近轨迹点。设置 `preservePosition:true` 时须提供数值型 WGS84 `lon` / `lat`，不能同时指定 `index`；景点保留原坐标，地图范围自动包含这些景点，仍执行 5°跨度、留白后经纬度、纵横比与瓦片上限保护。只有名称和顺序时，先补定位依据；不要按里程比例伪造地标位置。概略定位必须写明。
+- 独立景点输出 `preservePosition:true`、最近轨迹点 `index`、`point:[lon,lat,elevation,nearest-track-km,u,v]` 与 `elevationSource`。`point[3]` 等于 `points[index][3]`，不是走到景点的距离；`u/v` 使用扩界后的 Mercator 投影。生成完成后的海拔在当前 DEM 网格双线性取高，来源为 `terrain`；`--demo` 为 `synthetic-terrain`（合成演示，不代表真实海拔）。仅调用 `parse_track` 时暂用最近轨迹海拔，注明 `nearest-track-reference`。3D、2D、选中点、点击聚焦与视频标签使用实际景点位置；详情显示经纬度、海拔来源及最近轨迹里程，不把轨迹速度算作景点属性。剖面和视频进度仍关联最近轨迹点。扩界只重算轨迹 `u/v`，不改变原始坐标、海拔、里程、速度、统计或公开 GPX；高清影像仍只覆盖原轨迹走廊。
 - 可选 `kilometerMarkers: {"distanceKm": 42.195, "positionSource": "按官方全程42.195 km比例定位"}`，仅在自己的路线配置中启用，模板 demo 默认不启用。`distanceKm` 须为有限正数（拒绝布尔、字符串），整数公里牌最多 1000 个，`positionSource` 须为非空文字。生成器与数据检查共用校验；浏览器遇无效配置会停用公里模式并注明，地图仍可使用。
 - 启用后，整数 `k` 从 1 到 `floor(distanceKm)`；几何位置为 `k × points[-1][3] / distanceKm`，在相邻原始轨迹点间插值并按 DEM 贴地。42.195 km 全程生成 1–42 共 42 个“km”牌，42 km 在终点前约 0.195 官方 km；不生成 43 km、不改轨迹点或统计。页面注明“公里标记按官方全程42.195 km与轨迹几何长度等比例定位”，依据仍来自所填 `positionSource`。标记不代表官方公里牌的实测坐标。
 - 公里模式下，飞行读数、当前位置、地标里程和剖面标尺采用同一比例，总里程与终点显示 3 位小数。剖面曲线像素位置、GPX 与几何距离字段保持不变；未配置时仍显示原来的几何里程。3D 和 2D 均使用同一组公里牌定义，全景减少标签密度，飞行优先当前和前方相邻公里，重合往返段按行进里程挑选，手机避开控件与剖面；每牌根节点含 `data-km`、`data-geometry-km` 和可访问名称。
@@ -40,7 +41,7 @@ python3 -m http.server 8080 --bind 127.0.0.1
 - 要手工提供统计，配置 `stats` 的 `gainM`、`lossM`、`durationHours`、`sourceDistanceKm`，同时必须填写 `statsSource`。缺失值用 `null`。
 - 可选 `routeColor` 为六位十六进制统一色；默认沿用模板颜色。网页提供统一 / 海拔 / 速度着色，3D 粗线、细线、遮挡线、2D 与剖面使用相同映射，速度由红色（最慢，`#ef4444`）经黄色（中间，`#facc15`）到绿色（最快，`#22c55e`），使用原有中间 90% 分位范围；少量或常量时取实际范围。海拔配色不变，图例注明单位与缺失 / 停留，缺失与停留仍使用独立颜色。旧数据无速度时禁用速度按钮。日期保留在数据中，默认不在 UI 展示。
 - 两步路 `Document id="TbuluKmlVersion2"` 的 KML `PauseTime` 单位为毫秒：运动时间 = 总耗时减暂停。原记录里程优先用于平均配速；地图里程仍按坐标测算，分别注明口径。`SportAvgSpeed` 仅在与里程 / 运动时间一致时采用。其它导出方或 GPX 的 `PauseTime` 单位不猜测；核实后可配置有 `statsSource` 的 `stats.pauseSeconds`。缺少可靠暂停统计时只显示总耗时（未扣暂停），不伪造运动时间或平均配速。
-- `points` 仍为六列；并行 `speedMps` / `speedState` 与点序对齐，单位为 `speedUnit="m/s"`，来源见 `speedSource`。速度按相邻坐标与时间差推算，不解码语义未知的 `GxTrackExtendedData`。首点、缺失时间和零时间差为 `null / missing`；超过 30 秒的间隔为 `null / gap`；低于 0.5 m/s 标为 `stopped`。速度表示结束于该点的区间；停留不显示配速。这些局部标记不替代原记录暂停汇总。
+- `points` 仍为六列 `[lon,lat,elevation,track-km,u,v]`；并行 `speedMps` / `speedState` 与点序对齐，单位为 `speedUnit="m/s"`，来源见 `speedSource`。速度按相邻坐标与时间差推算，不解码语义未知的 `GxTrackExtendedData`。首点、缺失时间和零时间差为 `null / missing`；超过 30 秒的间隔为 `null / gap`；低于 0.5 m/s 标为 `stopped`。速度表示结束于该点的区间；停留不显示配速。这些局部标记不替代原记录暂停汇总。
 - 支持 GPX 1.0 / 1.1 的一个连续 `trkseg` 或 KML 2.2 的一个 `gx:Track`，2–20000 点，每点必须有海拔；多段轨迹先拆分。直线路线按长边地面长度扩大短边留白；超大、跨日期变更线、极区或留白后仍超出支持范围的路线明确拒绝。
 
 公开 `data/route.json` 可含相对速度与活动汇总，不含逐点绝对时间或未知扩展数组。公开 `data/route.gpx` 只保留轨迹名、坐标和海拔，去掉作者、账号、头像、照片、逐点时间及原扩展。发布前核查生成数据与配置，不提交原始输入。
@@ -90,6 +91,8 @@ python3 scripts/check_data.py
 ```
 
 `--demo` 只生成明确标注的合成地形与底图，用于离线开发和测试；真实行程生成时省略此参数。浏览器检查桌面、手机、地标点击、剖面联动与 `?view=2d`。GitHub Actions 验证数据和脚本；合入后启用 GitHub Pages：main 分支，根目录 `/`。发布后再次检查在线页面。
+
+独立景点回归覆盖保留坐标、扩界与投影、DEM 双线性取高、非法配置与旧输出保护、旧配置吸附，以及实际应用处理器的列表/标签点击、3D 聚焦、选中点、2D 标签、详情、剖面关联和视频定位。场景测试使用 CPU 渲染器替身，不替代真实 Edge 的 WebGL、布局与视觉验收。
 
 现有测试入口同时加载 `test_city_flight.mjs`，使用实际 Three.js 几何和 CPU 场景替身检查凹轮廓法线、悬空部件、独立高度、相机移动、暂停、进度、倍速、重播、开关与加载失败。它不验证 WebGL 画面、手机布局或视觉效果；发布前另在真实 Edge 验看城市近景、电视塔部件与窄屏控件。
 

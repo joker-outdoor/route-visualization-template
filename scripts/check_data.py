@@ -90,6 +90,31 @@ def validate_imagery_detail(data, directory=None, map_bounds=None):
                 image.load()
     return data
 
+def validate_landmarks(data):
+    points = data['points']
+    mx0, my0, mx1, my1 = data['bounds']['mercator']
+    for mark in data['landmarks']:
+        assert isinstance(mark.get('name'), str) and mark['name'].strip()
+        assert isinstance(mark.get('positionSource'), str) and mark['positionSource'].strip()
+        index = mark['index']
+        assert type(index) is int and 0 <= index < len(points)
+        assert type(mark.get('preservePosition', False)) is bool
+        if not mark.get('preservePosition'):
+            assert 'point' not in mark
+            continue
+        p = mark.get('point')
+        assert isinstance(p, list) and len(p) == 6 and all(type(v) in (int, float) and math.isfinite(v) for v in p)
+        lon, lat, elevation, km, u, v = p
+        assert -180 < lon < 180 and -85 < lat < 85 and 0 <= u <= 1 and 0 <= v <= 1
+        mx, my = (lon+180)/360, (1-math.asinh(math.tan(math.radians(lat)))/math.pi)/2
+        assert abs((mx-mx0)/(mx1-mx0)-u) < 1e-7 and abs((my-my0)/(my1-my0)-v) < 1e-7
+        assert km == points[index][3]
+        def separation(q):
+            a, b = math.radians(lat), math.radians(q[1])
+            return math.sin((b-a)/2)**2 + math.cos(a)*math.cos(b)*math.sin(math.radians(q[0]-lon)/2)**2
+        assert separation(points[index]) <= min(map(separation, points)) + 1e-15
+        assert mark.get('elevationSource') in {'terrain', 'synthetic-terrain', 'nearest-track-reference'}
+
 def check(directory):
     d=json.loads((directory/'route.json').read_text());t=json.loads((directory/'terrain.json').read_text());p=d['points']
     assert len(p)>=2 and p[0][3]==0
@@ -110,7 +135,7 @@ def check(directory):
         assert abs((mx-mx0)/(mx1-mx0)-u)<1e-7 and abs((my-my0)/(my1-my0)-v)<1e-7
     assert t['w']>=2 and t['h']>=2 and len(t['elevations'])==t['w']*t['h']
     assert all(math.isfinite(e) for e in t['elevations'])
-    assert all(type(m['index']) is int and 0<=m['index']<len(p) and m['positionSource'] for m in d['landmarks'])
+    validate_landmarks(d)
     if 'kilometerMarkers' in d: validate_kilometer_markers(d['kilometerMarkers'])
     if 'buildingsFile' in d:
         validate_buildings(json.loads(buildings_path(directory, d['buildingsFile']).read_text()))
