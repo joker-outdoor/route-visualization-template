@@ -107,7 +107,7 @@ python3 scripts/check_data.py
 
 ## 导出 3D 飞越视频
 
-`video.html` 使用同一份 `data/`，按 GPX 距离推进镜头、移动点和海拔剖面；前后保留全景。数据可使用模板的 `landmarks`，兼容旧七湖页面的 `lakes`。视频显示轨迹日期、制作日期、数据署名和定位说明，不把动画时长当实际行走速度。演示数据仍明确标为合成。
+`video.html` 使用同一份 `data/`。开场从全景进入斜视飞行，镜头朝轨迹前方看，将当前位置留在画面下半部，在折返处平缓转向并拉远。绿线和移动点沿原始折线按几何里程推进。旅行画面突出当前里程和下一地标，结尾拉回全景并展示完整轨迹与剖面。地标支持 `landmarks` 和旧七湖路线的 `lakes`。视频保留底图和高程署名，日期有值时显示，动画时长不代表实际行走速度。演示数据明确标为合成。
 
 本机安装 Microsoft Edge、ffmpeg（含 ffprobe）与 Node.js；`npm ci` 安装锁定的 Playwright。渲染器启动独立 headless Edge 和仅监听 127.0.0.1 的短时服务器，结束后关闭，不使用个人浏览器登录态。逐帧指定动画时间，不依赖屏幕录制的实时帧率。
 
@@ -119,7 +119,20 @@ node scripts/render_video.mjs --output /path/to/route-landscape.mp4 --width 1920
 
 默认 1080×1920、30 fps、46 秒、无音轨，输出 H.264 / yuv420p / faststart MP4。`--width` / `--height` / `--fps` / `--duration` 可调整；已有文件拒绝覆盖。若复用外部已安装的依赖，可传 `--playwright /absolute/path/to/playwright/index.mjs`。
 
-先用 `--duration 2` 做短片试验，再输出正式片；检查开场、中段、结尾的轨迹方向、地标、里程、海拔、字幕遮挡和黑屏。脚本验证起终点及 ffprobe 编码、分辨率、帧数、时长；视觉验收另做。MP4 可放 `videos/` 后在 README 或页面添加播放、下载链接，保留具体项目生成器版本。
+先用 `--duration 2 --skip-photos` 做地图短片，再按正式时长验看照片。检查开场、飞行、照片切换和结尾，核对路线方向、里程、字幕遮挡、照片裁切和署名。脚本验证起终点与 ffprobe 编码、分辨率、帧数及实际时长。MP4 可放 `videos/`，在 README 或页面提供播放与下载链接，并记录所用模板版本。
+
+### 地标照片
+
+在路线配置中添加可选的 `video.stops` 数组，然后用原命令重新生成 `data/route.json`。照片留在项目目录中，构建器会传递配置。省略 `video` 或使用空数组时，视频按默认故事板全程飞行。
+
+仓库预置的演示数据用于预览无照片路线。体验照片停留时，按上文的 `--demo` 命令用[演示配置](examples/route.config.json) 重建 `data/`，再打开 `video.html`。演示使用生成的合成底图作为照片。
+
+- `src` 必填，填写相对项目根目录的本地 JPEG、PNG、WebP 或 AVIF 路径，例如 `photos/pass.jpg`。照片铺满画面并居中裁切。开始渲染前会加载并解码全部照片，缺失或损坏时报告对应路径。
+- `km` 与 `landmark` 二选一。前者填写从起点算起的几何里程，范围为 0 到路线总里程。后者填写唯一匹配的现有地标名，停在该地标对应的轨迹点。照片按里程播放，同里程按配置顺序播放，可在起点和终点停留。
+- `name`、`caption`、`source` 为可选文本。地标引用默认使用地标名。填写照片的可读署名或来源，并使用有授权的素材。
+- `holdSeconds` 默认 3 秒，表示完整显示的时长。 `transitionSeconds` 默认 0.5 秒，分别用于淡入和淡出，可设为 0。转场和完整展示期间镜头与里程保持在同一点，随后从那里继续。
+
+`--duration` 始终指定总时长。照片预算为每张的 `holdSeconds + 2 × transitionSeconds` 之和，含照片时还需留至少 2 秒给地图。预算不足会报出最短时长。 `--skip-photos` 跳过照片及其加载，仅用于生成地图版本。浏览器预览可打开 `video.html?duration=60` 调整时长，或用 `video.html?skipPhotos&duration=2` 预览地图。编码以整数帧计时，实际时长为 `round(duration × fps) / fps`。
 
 ### 运动健康统计
 

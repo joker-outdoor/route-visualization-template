@@ -213,6 +213,7 @@ def parse_track(gpx, config):
             'terrainUrl':'https://github.com/tilezen/joerd',
             'imageryCredit':'Imagery © Esri, Maxar, Earthstar Geographics, and the GIS User Community',
             'terrainCredit':'Terrain · Mapzen; SRTM / GMTED2010 courtesy of USGS', 'landmarks':landmarks}
+    if 'video' in config: data['video'] = config['video']
     if 'kilometerMarkers' in config: data['kilometerMarkers'] = validate_kilometer_markers(config['kilometerMarkers'])
     import re
     if not isinstance(data['routeColor'],str) or not re.fullmatch(r'#[0-9a-fA-F]{6}',data['routeColor']): raise ValueError('routeColor must be a six-digit hex color')
