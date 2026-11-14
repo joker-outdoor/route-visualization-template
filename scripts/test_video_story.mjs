@@ -76,6 +76,7 @@ test('distance-sampled camera turns continuously through a right angle and an ex
 async function videoFixture({ viewport, search = '?capture&duration=8', stops, decode, legacy = false }) {
   const data = { ...route };
   if (stops !== undefined) data.video = { stops };
+  else delete data.video;
   if (legacy) {
     data.lakes = data.landmarks;
     delete data.landmarks;

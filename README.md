@@ -123,7 +123,9 @@ node scripts/render_video.mjs --output /path/to/route-landscape.mp4 --width 1920
 
 ### 地标照片
 
-在路线配置中添加可选的 `video.stops` 数组，然后用原命令重新生成 `data/route.json`。照片留在项目目录中，构建器会传递配置。省略 `video` 或使用空数组时，视频按默认故事板全程飞行。[演示配置](examples/route.config.json) 用生成的合成底图演示停留。
+在路线配置中添加可选的 `video.stops` 数组，然后用原命令重新生成 `data/route.json`。照片留在项目目录中，构建器会传递配置。省略 `video` 或使用空数组时，视频按默认故事板全程飞行。
+
+仓库预置的演示数据用于预览无照片路线。体验照片停留时，按上文的 `--demo` 命令用[演示配置](examples/route.config.json) 重建 `data/`，再打开 `video.html`。演示使用生成的合成底图作为照片。
 
 - `src` 必填，填写相对项目根目录的本地 JPEG、PNG、WebP 或 AVIF 路径，例如 `photos/pass.jpg`。照片铺满画面并居中裁切。开始渲染前会加载并解码全部照片，缺失或损坏时报告对应路径。
 - `km` 与 `landmark` 二选一。前者填写从起点算起的几何里程，范围为 0 到路线总里程。后者填写唯一匹配的现有地标名，停在该地标对应的轨迹点。照片按里程播放，同里程按配置顺序播放，可在起点和终点停留。
