@@ -10,5 +10,15 @@
       "index": 40,
       "positionSource": "合成示例的第 40 号轨迹点"
     }
-  ]
+  ],
+  "video": {
+    "stops": [
+      {
+        "landmark": "演示地标",
+        "src": "data/satellite.jpg",
+        "caption": "合成底图用来演示照片停留。",
+        "source": "模板合成数据"
+      }
+    ]
+  }
 }

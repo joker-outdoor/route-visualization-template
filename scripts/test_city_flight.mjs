@@ -4,6 +4,7 @@ import {readFile} from 'node:fs/promises';
 import vm from 'node:vm';
 import * as THREE from '../vendor/three.module.js';
 import * as style from '../route-style.js';
+import * as story from '../video-story.js';
 
 const source = await readFile(new URL('../app.js', import.meta.url), 'utf8');
 const pure = source.slice(source.indexOf('function trackSample('), source.indexOf('\nfunction nearest('));
@@ -597,8 +598,8 @@ test('video labels use actual POI coordinates but keep nearest-track mileage and
       append(...items){this.children.push(...items);},getContext(){return new Proxy({},{get:(_,method)=>(...args)=>{calls.push({method,args});if(method==='createLinearGradient')return {addColorStop(){}};}});}});return elements.get(id);}
     let camera;
     class Renderer{constructor(){this.capabilities={getMaxAnisotropy:()=>1};}setSize(){}setPixelRatio(){}render(scene,c){camera=c;}}
-    const context=vm.createContext({...style,THREE:{...THREE,WebGLRenderer:Renderer,TextureLoader:class{async loadAsync(){return new THREE.Texture();}}},
-      document:{getElementById:el,createElement:()=>el(Symbol()),createTextNode:text=>({textContent:text})},window:{},innerWidth:1200,innerHeight:900,
+    const context=vm.createContext({...style,...story,THREE:{...THREE,WebGLRenderer:Renderer,TextureLoader:class{async loadAsync(){return new THREE.Texture();}}},
+      document:{body:{classList:{toggle(){}}},getElementById:el,createElement:()=>el(Symbol()),createTextNode:text=>({textContent:text})},window:{},innerWidth:1200,innerHeight:900,
       fetch:async url=>({ok:true,json:async()=>url.includes('terrain')?terrain:route}),URLSearchParams,location:{search:'?capture'}});
     await vm.runInContext('(async()=>{'+videoSource.replace(/^import .*;\n/gm,'')+'})()',context);
     assert.equal(context.window.videoError,undefined);assert.equal(context.window.videoReady,true);
@@ -610,7 +611,9 @@ test('video labels use actual POI coordinates but keep nearest-track mileage and
     assert.equal(label.children.at(-1).textContent,independent?'最近轨迹 0.0 km':'0.0 km');
     const profileNumber=calls.find(c=>c.method==='fillText'&&c.args[0]==='1');
     assert.equal(profileNumber.args[1],8); // nearest track point, not actual POI u/v
-    const frame=context.window.renderVideoFrame(23,46);
+    const timeline=story.createVideoTimeline({distanceKm:1,duration:46});
+    const travel=timeline.segments.find(part=>part.phase==='travel');
+    const frame=context.window.renderVideoFrame((travel.start+travel.end)/2,46);
     assert.equal(frame.km,.5);assert.equal(frame.index,1);
   }
 });

@@ -1,7 +1,73 @@
 <!doctype html>
-<html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>路线 3D 飞越</title>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>路线 3D 飞越</title>
 <style>
-*{box-sizing:border-box}body{margin:0;background:#091319;color:#eff8f2;font-family:system-ui,-apple-system,"PingFang SC",sans-serif;overflow:hidden}#map{position:absolute;width:100%;height:100%}header{position:absolute;top:6%;left:5%;right:5%;pointer-events:none}small{font-size:16px;letter-spacing:4px;color:#b2c4c5}h1{font-size:58px;line-height:1.15;margin:16px 0}#subtitle{font-size:21px;color:#c8dad9}#labels{position:absolute;inset:0;pointer-events:none}.label{position:absolute;white-space:nowrap;background:#08151de8;border-left:3px solid #72dad2;padding:8px 12px;font-size:18px;box-shadow:0 3px 15px #0005}.label b{color:#b9ef69;margin-right:8px}.label span{display:block;color:#a8bfbe;font-size:13px;margin:4px 0 0 22px}footer{position:absolute;bottom:0;width:100%;padding:65px 5% 2%;background:linear-gradient(transparent,#091319 22%);pointer-events:none}.readings{display:flex;justify-content:space-between;align-items:end}.tag{color:#091319;background:#b9ef69;padding:5px 10px;font-size:19px;font-weight:750;width:fit-content}.distance{font-size:70px;font-weight:850}.unit{font-size:24px;margin-left:5px}.right{text-align:right;font-size:18px;color:#c8dad9}.elevation{font-size:42px;font-weight:750;color:white}#next{margin-top:12px;font-size:17px}#profile{width:100%;height:130px;margin:14px 0}#source{font-size:12px;color:#93aaa9;line-height:1.7}.shade{position:absolute;inset:0;background:linear-gradient(#091319b0,transparent 28%);pointer-events:none}#error{position:absolute;top:45%;left:5%;color:#ffb8a5}
-@media(max-aspect-ratio:1/1){header{top:6%}h1{font-size:66px}small{font-size:19px}#subtitle{font-size:23px;max-width:95%;line-height:1.7}footer{padding-top:80px;padding-bottom:3%}#profile{height:170px}.distance{font-size:86px}.elevation{font-size:48px}.label{font-size:22px}.label span{font-size:15px}#source{font-size:14px}}
-</style><script type="importmap">{"imports":{"three":"./vendor/three.module.js"}}</script></head>
-<body><canvas id="map"></canvas><div class="shade"></div><div id="labels"></div><header><small>JOKER OUTDOOR · ROUTE FILM</small><h1 id="title"></h1><div id="subtitle"></div></header><footer><div class="readings"><div><div class="tag" id="phase"></div><div><span class="distance" id="distance">0.0</span><span class="unit">km</span></div></div><div class="right">海拔<div><span class="elevation" id="elevation"></span> m</div><div id="next"></div></div></div><canvas id="profile"></canvas><div id="source"></div></footer><div id="error"></div><script type="module" src="video.js"></script></body></html>
+*{box-sizing:border-box}
+body{margin:0;background:#091319;color:#eff8f2;font-family:system-ui,-apple-system,"PingFang SC",sans-serif;overflow:hidden}
+#map,.shade,#labels,#photo,#photo-image{position:absolute;inset:0;width:100%;height:100%}
+.shade{background:linear-gradient(#091319bc,transparent 27%);pointer-events:none}
+header{position:absolute;top:5%;left:5%;right:5%}
+h1{font-size:clamp(24px,5.8vmin,66px);line-height:1.12;margin:0 0 .2em}
+h1,#photo-copy,#next{overflow-wrap:anywhere}
+#subtitle{font-size:clamp(13px,2.1vmin,24px);color:#d8e5e0}
+.in-travel h1{font-size:clamp(18px,3vmin,34px)}
+.in-travel #subtitle,.in-travel #phase,.in-travel #profile,.in-travel #notes{display:none}
+#marker{position:absolute;width:clamp(12px,2vmin,24px);aspect-ratio:1;border-radius:50%;background:#fff;border:3px solid #145242;box-shadow:0 0 0 2px #d9ffa0}
+#labels{pointer-events:none}
+.label{position:absolute;white-space:nowrap;background:#08151de8;border-left:3px solid #72dad2;padding:.35em .65em;font-size:clamp(12px,1.8vmin,22px);box-shadow:0 3px 15px #0005}
+.label b{color:#b9ef69;margin-right:.5em}
+.label span{display:block;color:#c2d3cd;font-size:.72em;margin:.15em 0 0 1.4em}
+footer{position:absolute;bottom:0;width:100%;padding:6vh 5% 2vh;background:linear-gradient(transparent,#091319f5 28%);pointer-events:none}
+.in-travel footer{padding-top:4vh;background:linear-gradient(transparent,#091319ef 55%)}
+.readings{display:flex;justify-content:space-between;align-items:baseline;gap:1em}
+.tag{color:#121d16;background:#b9ef69;padding:.28em .62em;font-size:clamp(12px,1.7vmin,19px);font-weight:750;width:fit-content}
+.distance{font-size:clamp(30px,6.7vmin,80px);font-weight:850;font-variant-numeric:tabular-nums;line-height:1.12}
+.unit{font-size:clamp(12px,2.1vmin,24px);margin-left:.25em}
+#next{display:none;text-align:right;font-size:clamp(14px,2.7vmin,30px);font-weight:700}
+.in-travel #next{display:block}
+#next:empty{display:none}
+#profile{display:block;width:100%;height:clamp(64px,11vh,155px);margin:.6em 0}
+#source,#notes,#photo-source{font-size:clamp(11px,1.35vmin,16px);color:#c0d2ce;line-height:1.45}
+#notes{margin-top:.2em}
+#photo{margin:0;opacity:0;background:#091319;pointer-events:none}
+#photo-image img{width:100%;height:100%;object-fit:cover}
+#photo-copy{position:absolute;bottom:0;left:0;right:0;padding:8vh 5% 3vh;background:linear-gradient(transparent,#091319f5)}
+#photo-copy:not(:has(> :not(:empty))){display:none}
+#photo-name{font-size:clamp(18px,4vmin,44px);font-weight:750}
+#photo-caption{font-size:clamp(13px,2.2vmin,25px);margin:.2em 0}
+#photo-caption:empty{display:none}
+#error{position:absolute;top:45%;left:5%;right:5%;color:#ffb8a5}
+</style>
+<script type="importmap">{"imports":{"three":"./vendor/three.module.js"}}</script>
+</head>
+<body>
+<canvas id="map"></canvas>
+<div class="shade"></div>
+<div id="marker" aria-hidden="true"></div>
+<div id="labels"></div>
+<header><h1 id="title"></h1><div id="subtitle"></div></header>
+<footer>
+  <div class="tag" id="phase"></div>
+  <div class="readings">
+    <div><span class="distance" id="distance">0.00</span><span class="unit">km</span></div>
+    <div id="next"></div>
+  </div>
+  <canvas id="profile"></canvas>
+  <div id="source"></div>
+  <div id="notes"></div>
+</footer>
+<figure id="photo">
+  <div id="photo-image"></div>
+  <figcaption id="photo-copy">
+    <div id="photo-name"></div>
+    <div id="photo-caption"></div>
+    <div id="photo-source"></div>
+  </figcaption>
+</figure>
+<div id="error" role="alert"></div>
+<script type="module" src="video.js"></script>
+</body>
+</html>
